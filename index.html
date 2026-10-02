@@ -1,0 +1,838 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>V.I.C.T.O.R.</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/gridjs/dist/theme/mermaid.min.css">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+<script src="https://unpkg.com/gridjs/dist/gridjs.umd.js"></script>
+<style>
+  /* Palette unique « sous-bois au petit matin » : tons désaturés, contrastes doux,
+     ni noir pur ni blanc pur, pour un écran reposant. RGB sans parenthèses → rgba(var(--x), a). */
+  :root {
+    --a1: 156,190,164;  --a2: 196,176,132;  --deep: 14,22,17;
+    --bg: #0c130f; --glow: rgba(70,100,80,.22);
+    --cyan: rgb(var(--a1)); --cyan-dim: #5d7a66; --amber: rgb(var(--a2));
+    --text: #dde6df; --text2: #b4c4b8; --dim: #71877a; --ok: #a8cf8e; --err: #d9826f;
+    --core: 236,243,238; --core-dark: 18,28,22;
+    --s1: #7fae8c; --s2: #c49a5a; --s3: #7f9fb8;
+  }
+  :root {
+    --fs: 1;   /* taille du texte de toute l'interface (boutons A− / A+) */
+    --side: calc(340px * min(var(--fs), 1.35));
+    --panel: rgba(var(--deep),.78); --line: rgba(var(--a1),.18);
+    --font-hud: "Rajdhani", sans-serif; --font-mono: "Share Tech Mono", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(1100px 650px at 50% 38%, var(--glow) 0%, transparent 60%),
+      var(--bg);
+    color: var(--text); font-family: var(--font-hud);
+    height: 100vh; overflow: hidden; display: flex;
+  }
+  /* fond : courbes de niveau (dessinées en JS sur ce canvas) */
+  #topo { position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+  /* subtle vignette */
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    box-shadow: inset 0 0 220px rgba(0,0,0,.55);
+  }
+
+  /* ------------------------------------------------ HUD chrome */
+  .corner { position: fixed; width: 46px; height: 46px; pointer-events: none; z-index: 5; }
+  .corner::before { content: ""; position: absolute; inset: 0; border: 2px solid var(--cyan); opacity: .55; }
+  .corner.tl { top: 14px; left: 14px; } .corner.tl::before { border-right: 0; border-bottom: 0; }
+  .corner.tr { top: 14px; right: calc(var(--side) + 18px); } .corner.tr::before { border-left: 0; border-bottom: 0; }
+  .corner.bl { bottom: 14px; left: 14px; } .corner.bl::before { border-right: 0; border-top: 0; }
+  .corner.br { bottom: 14px; right: calc(var(--side) + 18px); } .corner.br::before { border-left: 0; border-top: 0; }
+
+  #topbar {
+    position: fixed; top: 20px; left: 80px; right: calc(var(--side) + 80px); z-index: 5;
+    display: flex; justify-content: space-between; align-items: center;
+    font-family: var(--font-mono); font-size: calc(11px * var(--fs)); color: var(--dim);
+    letter-spacing: .28em; text-transform: uppercase;
+  }
+  #fontctl { display: flex; align-items: center; gap: 6px; letter-spacing: .08em; }
+  #fontctl button {
+    min-width: calc(34px * min(var(--fs), 1.3)); height: calc(26px * min(var(--fs), 1.3)); padding: 0 8px; cursor: pointer;
+    background: rgba(var(--deep),.6); color: var(--text); border: 1px solid var(--line);
+    font-family: var(--font-hud); font-size: calc(14px * min(var(--fs), 1.3)); font-weight: 600; letter-spacing: 0;
+  }
+  #fontctl button:hover { border-color: var(--cyan); color: var(--cyan); }
+  #fontctl button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+  #fontctl button:disabled { opacity: .35; cursor: default; }
+  #fs-val { min-width: 42px; text-align: center; }
+  #topbar .sys { color: var(--cyan); text-shadow: 0 0 12px rgba(var(--a1),.8); }
+  #clock { color: var(--amber); }
+
+  #stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
+  #orb { width: min(62vh, 580px); height: min(62vh, 580px); margin: -50px 0 -40px; cursor: pointer; filter: drop-shadow(0 0 35px rgba(var(--a1),.25)); }
+  #status {
+    margin-top: 6px; letter-spacing: .45em; text-transform: uppercase;
+    font-size: calc(12px * var(--fs)); font-weight: 600; color: var(--dim); font-family: var(--font-mono);
+  }
+  #status b { color: var(--cyan); font-weight: 600; text-shadow: 0 0 14px rgba(var(--a1),.9); }
+  #hint { position: absolute; bottom: 22px; font-size: calc(11px * var(--fs)); color: var(--dim); font-family: var(--font-mono); letter-spacing: .2em; }
+  #transcript {
+    position: absolute; top: 54px; left: 50%; transform: translateX(-50%);
+    max-width: 68%; text-align: center; font-size: calc(15px * var(--fs)); font-weight: 500;
+    color: var(--text2); min-height: 22px; text-shadow: 0 0 18px rgba(var(--a1),.35);
+  }
+
+  #transcript.user { color: var(--dim); font-style: italic; }
+  #ask { margin-top: 18px; width: min(calc(420px * var(--fs)), 80%); }
+  #ask input {
+    width: 100%; background: rgba(var(--deep),.6); border: 1px solid var(--line);
+    border-bottom: 2px solid var(--cyan-dim); color: var(--text); padding: 8px 12px;
+    font-family: var(--font-mono); font-size: calc(13px * var(--fs)); letter-spacing: .04em; outline: none;
+  }
+  #ask input:focus { border-bottom-color: var(--cyan); box-shadow: 0 6px 18px -10px rgba(var(--a1),.6); }
+  #ask input::placeholder { color: var(--dim); }
+
+  /* ------------------------------------------------ display cards (HUD holograms) */
+  #cards {
+    position: absolute; top: 96px; left: 34px; bottom: 30px; width: min(calc(330px * var(--fs)), 40vw);
+    display: flex; flex-direction: column; gap: 14px; overflow-y: auto;
+    pointer-events: none; scrollbar-width: none; z-index: 4;
+  }
+  .card {
+    pointer-events: auto; position: relative;
+    background: linear-gradient(135deg, rgba(var(--a1),.10), rgba(var(--deep),.85) 45%);
+    border: 1px solid var(--line); border-left: 3px solid var(--cyan);
+    padding: 12px 14px 12px 16px; backdrop-filter: blur(6px);
+    clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 0 100%);
+    animation: materialize .45s cubic-bezier(.2,.9,.3,1);
+    box-shadow: 0 0 24px rgba(var(--a1),.10), inset 0 0 30px rgba(var(--a1),.04);
+  }
+  @keyframes materialize {
+    0% { transform: translateX(-24px) skewX(-4deg); opacity: 0; filter: brightness(3); }
+    60% { filter: brightness(1.6); }
+    100% { transform: none; opacity: 1; filter: none; }
+  }
+  .card.warning { border-left-color: var(--amber); }
+  .card.result { border-left-color: var(--ok); }
+  .card h3 {
+    font-size: calc(12px * var(--fs)); letter-spacing: .3em; text-transform: uppercase; font-weight: 700;
+    color: var(--cyan); margin-bottom: 8px; font-family: var(--font-mono);
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .card.warning h3 { color: var(--amber); } .card.result h3 { color: var(--ok); }
+  .card h3 .x { cursor: pointer; color: var(--dim); font-size: calc(13px * var(--fs)); letter-spacing: 0; }
+  .card h3 .x:hover { color: var(--err); }
+  .card .body { font-size: calc(14px * var(--fs)); line-height: 1.5; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+  .card .body code {
+    font-family: var(--font-mono); font-size: calc(12.5px * var(--fs)); color: var(--amber);
+    background: rgba(var(--a2),.08); padding: 1px 5px; border-radius: 2px;
+  }
+  .card .body ul { margin: 4px 0 0 16px; }
+  .card.code .body { font-family: var(--font-mono); font-size: calc(12px * var(--fs)); color: var(--text2); }
+
+  /* ------------------------------------------------ right panel */
+  #side {
+    width: var(--side); flex-shrink: 0; border-left: 1px solid var(--line); background: var(--panel);
+    backdrop-filter: blur(10px); padding: 18px; overflow-y: auto; z-index: 6;
+  }
+  #side h2 {
+    font-size: calc(11px * var(--fs)); letter-spacing: .22em; text-transform: uppercase; color: var(--cyan);
+    margin-bottom: 14px; font-family: var(--font-mono);
+    border-bottom: 1px solid var(--line); padding-bottom: 10px;
+    text-shadow: 0 0 10px rgba(var(--a1),.6);
+  }
+  .task {
+    border: 1px solid var(--line); border-left: 3px solid var(--cyan);
+    padding: 12px 14px; margin-bottom: 12px;
+    background: linear-gradient(180deg, rgba(var(--a1),.06), transparent);
+    clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 0 100%);
+    animation: materialize .35s ease;
+  }
+  .task .t { font-size: calc(14px * var(--fs)); font-weight: 600; margin-bottom: 6px; letter-spacing: .04em; }
+  .task .s { font-size: calc(11px * var(--fs)); color: var(--dim); display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
+  .task .out { font-size: calc(11px * var(--fs)); color: var(--text2); margin-top: 8px; max-height: calc(120px * var(--fs)); overflow: auto; white-space: pre-wrap; font-family: var(--font-mono); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 8px var(--cyan); animation: blink 1s infinite alternate; }
+  .task.done { border-left-color: var(--ok); } .task.done .dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); animation: none; }
+  .task.error { border-left-color: var(--err); } .task.error .dot { background: var(--err); box-shadow: 0 0 8px var(--err); animation: none; }
+  .task.cancelled { border-left-color: var(--dim); opacity: .65; } .task.cancelled .dot { background: var(--dim); box-shadow: none; animation: none; }
+  .task .cancel { margin-left: auto; cursor: pointer; color: var(--dim); }
+  .task .cancel:hover { color: var(--err); }
+  @keyframes blink { to { opacity: .2; } }
+  #empty { font-size: calc(12px * var(--fs)); color: var(--dim); font-style: italic; }
+
+  /* ------------------------------------------------ report dashboard overlay */
+  #report {
+    position: fixed; inset: 60px calc(var(--side) + 40px) 40px 60px; z-index: 20; display: none;
+    background: rgba(var(--deep),.96); border: 1px solid var(--line);
+    border-top: 2px solid var(--cyan); backdrop-filter: blur(14px);
+    box-shadow: 0 0 60px rgba(0,0,0,.7), 0 0 30px rgba(var(--a1),.08);
+    padding: 22px 26px; overflow-y: auto; animation: materialize .35s ease;
+  }
+  #report.open { display: block; }
+  #report .rhead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+  #report .rhead h2 { font-size: calc(16px * var(--fs)); letter-spacing: .22em; text-transform: uppercase; color: var(--cyan); font-family: var(--font-mono); }
+  #report .rhead .x { cursor: pointer; color: var(--dim); font-size: calc(18px * var(--fs)); }
+  #report .rhead .x:hover { color: var(--err); }
+  #kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(calc(150px * var(--fs)), 1fr)); gap: 12px; margin-bottom: 18px; }
+  .kpi { border: 1px solid var(--line); border-left: 3px solid var(--cyan); padding: 12px 14px; background: rgba(var(--a1),.04); }
+  .kpi .l { font-size: calc(11px * var(--fs)); letter-spacing: .18em; text-transform: uppercase; color: var(--dim); font-family: var(--font-mono); }
+  .kpi .v { font-size: calc(26px * var(--fs)); font-weight: 700; color: var(--text); margin-top: 4px; }
+  .kpi .d { font-size: calc(12px * var(--fs)); font-family: var(--font-mono); margin-top: 2px; color: var(--ok); }
+  .kpi .d.neg { color: var(--err); }
+  #rchart { margin-bottom: 18px; }
+  #rtable { margin-bottom: 18px; }
+  /* Grid.js dark re-skin */
+  #rtable .gridjs-wrapper, #rtable .gridjs-table { background: transparent; box-shadow: none; }
+  #rtable th.gridjs-th { background: rgba(var(--a1),.06); color: var(--cyan); border-color: var(--line); font-family: var(--font-mono); font-size: calc(11px * var(--fs)); letter-spacing: .1em; }
+  #rtable td.gridjs-td, #rtable .gridjs-tr, #rtable .gridjs-tbody { background: transparent !important; color: var(--text); border-color: var(--line); font-size: calc(13px * var(--fs)); }
+  #rtable .gridjs-tr:hover td { background: rgba(var(--a1),.06) !important; }
+  #rtable .gridjs-search input, #rtable .gridjs-pagination { background: transparent; color: var(--dim); border-color: var(--line); }
+  #rtable .gridjs-pagination button { background: transparent; color: var(--dim); border-color: var(--line); }
+  #rtable .gridjs-pagination button.gridjs-currentPage { background: rgba(var(--a1),.12); color: var(--cyan); }
+  #rmd { font-size: calc(14px * var(--fs)); line-height: 1.6; color: var(--text); }
+  #rmd h1, #rmd h2, #rmd h3 { color: var(--cyan); margin: 12px 0 6px; font-family: var(--font-hud); }
+  #rmd table { border-collapse: collapse; margin: 8px 0; }
+  #rmd th, #rmd td { border: 1px solid var(--line); padding: 5px 10px; font-size: calc(13px * var(--fs)); }
+  #rmd code { font-family: var(--font-mono); color: var(--amber); background: rgba(var(--a2),.08); padding: 1px 5px; }
+  #rmd ul, #rmd ol { margin: 6px 0 6px 20px; }
+</style>
+</head>
+<body>
+  <canvas id="topo" aria-hidden="true"></canvas>
+  <div class="corner tl"></div><div class="corner tr"></div>
+  <div class="corner bl"></div><div class="corner br"></div>
+  <div id="topbar">
+    <span class="sys">◈ V.I.C.T.O.R. — MARK I</span>
+    <span id="fontctl" role="group" aria-label="Taille du texte"><button type="button" id="fs-down" title="Réduire le texte" aria-label="Réduire la taille du texte">A−</button><span id="fs-val" aria-live="polite">100 %</span><button type="button" id="fs-up" title="Agrandir le texte" aria-label="Agrandir la taille du texte">A+</button></span>
+    <span id="clock">--:--:--</span>
+  </div>
+
+  <div id="stage">
+    <div id="transcript"></div>
+    <div id="cards"></div>
+    <canvas id="orb"></canvas>
+    <div id="status">clique l'orbe pour <b>initialiser</b></div>
+    <form id="ask" autocomplete="off"><input type="text" placeholder="… ou écris à VICTOR, puis Entrée" aria-label="Écrire à VICTOR"></form>
+    <div id="hint">SYSTÈME LOCAL · GRADIUM · CLAUDE CODE</div>
+  </div>
+  <div id="report">
+    <div class="rhead"><h2 id="rtitle"></h2><span class="x" onclick="document.getElementById('report').classList.remove('open')">✕</span></div>
+    <div id="kpis"></div>
+    <div id="rchart"></div>
+    <div id="rtable"></div>
+    <div id="rmd"></div>
+  </div>
+
+  <aside id="side">
+    <h2>⟢ Sessions Claude Code</h2>
+    <div id="tasks"><div id="empty">Aucune session. Demande une tâche à la voix.</div></div>
+  </aside>
+
+<script>
+"use strict";
+const orb = document.getElementById("orb");
+const ctx = orb.getContext("2d");
+const statusEl = document.getElementById("status");
+const transcriptEl = document.getElementById("transcript");
+const tasksEl = document.getElementById("tasks");
+const emptyEl = document.getElementById("empty");
+const cardsEl = document.getElementById("cards");
+const hintEl = document.getElementById("hint");
+
+let analyserIn = null, analyserOut = null;
+let running = false;
+
+/* clock */
+setInterval(() => {
+  document.getElementById("clock").textContent = new Date().toLocaleTimeString("fr-FR");
+}, 1000);
+
+/* ---------------------------------------------------------- palette (lue depuis les variables CSS) */
+const THEME = {};
+(function readTheme() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (n) => cs.getPropertyValue(n).trim();
+  Object.assign(THEME, { a1: v("--a1"), a2: v("--a2"), core: v("--core"), coreDark: v("--core-dark"),
+    dim: v("--dim"), text: v("--text"), series: [v("--s1"), v("--s2"), v("--s3")] });
+})();
+
+/* ---------------------------------------------------------- taille du texte (A− / A+) */
+const FS_STEPS = [0.85, 1, 1.15, 1.3, 1.5, 1.75, 2];
+let fsIdx = 1, lastReport = null;
+function applyFontSize(i) {
+  fsIdx = Math.max(0, Math.min(FS_STEPS.length - 1, i));
+  document.documentElement.style.setProperty("--fs", FS_STEPS[fsIdx]);
+  document.getElementById("fs-val").textContent = Math.round(FS_STEPS[fsIdx] * 100) + " %";
+  document.getElementById("fs-down").disabled = fsIdx === 0;
+  document.getElementById("fs-up").disabled = fsIdx === FS_STEPS.length - 1;
+  try { localStorage.setItem("victor-fs", fsIdx); } catch (_) {}
+  if (lastReport && document.getElementById("report").classList.contains("open")) showReport(lastReport);
+}
+document.getElementById("fs-down").addEventListener("click", () => applyFontSize(fsIdx - 1));
+document.getElementById("fs-up").addEventListener("click", () => applyFontSize(fsIdx + 1));
+(function () {
+  let saved = null;
+  try { saved = localStorage.getItem("victor-fs"); } catch (_) {}
+  applyFontSize(saved === null ? 1 : parseInt(saved, 10) || 1);
+})();
+
+/* ---------------------------------------------------------- utilitaires de dessin */
+const TAU = Math.PI * 2;
+let orbMode = "idle";          // idle | listening | thinking | speaking
+
+/* petit générateur pseudo-aléatoire déterministe : même dessin à chaque chargement */
+function rng(seed) {
+  return function () {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let r = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    r = r + Math.imul(r ^ r >>> 7, 61 | r) ^ r;
+    return ((r ^ r >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+/* ---------------------------------------------------------- fond : courbes de niveau */
+function drawTopo() {
+  const cv = document.getElementById("topo");
+  if (!cv) return;
+  const dpr = devicePixelRatio || 1;
+  const W = innerWidth, H = innerHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  cv.style.width = W + "px"; cv.style.height = H + "px";
+  const c = cv.getContext("2d");
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, W, H);
+
+  // relief : quelques collines et combes gaussiennes + une ondulation de fond
+  const rnd = rng(1914);
+  const hills = [];
+  for (let i = 0; i < 9; i++) {
+    hills.push({ x: rnd() * 1.6 - 0.05, y: rnd() * 1.1 - 0.05,
+                 h: (rnd() < 0.72 ? 1 : -0.7) * (0.5 + rnd()),
+                 s: 0.10 + rnd() * 0.24 });
+  }
+  const field = (x, y) => {
+    let z = 0.18 * Math.sin(2.6 * x + 1.1 * y) + 0.1 * Math.sin(5.3 * y - 1.7 * x + 0.8);
+    for (const p of hills) {
+      const dx = x - p.x, dy = y - p.y;
+      z += p.h * Math.exp(-(dx * dx + dy * dy) / (2 * p.s * p.s));
+    }
+    return z;
+  };
+
+  const cell = 7;
+  const nx = Math.ceil(W / cell) + 1, ny = Math.ceil(H / cell) + 1;
+  const scale = 1 / H;
+  const Z = new Float32Array(nx * ny);
+  let zmin = Infinity, zmax = -Infinity;
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const z = field(i * cell * scale, j * cell * scale);
+    Z[j * nx + i] = z;
+    if (z < zmin) zmin = z; if (z > zmax) zmax = z;
+  }
+
+  const levels = 34, step = (zmax - zmin) / levels;
+  const minor = new Path2D(), master = new Path2D();
+  // marching squares : pour chaque niveau, segments entre les bords de cellule traversés
+  for (let k = 1; k < levels; k++) {
+    const lv = zmin + k * step;
+    const path = k % 5 === 0 ? master : minor;
+    for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+      const a = Z[j * nx + i], b = Z[j * nx + i + 1];
+      const d = Z[(j + 1) * nx + i], cc = Z[(j + 1) * nx + i + 1];
+      const idx = (a > lv ? 8 : 0) | (b > lv ? 4 : 0) | (cc > lv ? 2 : 0) | (d > lv ? 1 : 0);
+      if (idx === 0 || idx === 15) continue;
+      const x = i * cell, y = j * cell;
+      const top = () => [x + cell * (lv - a) / (b - a), y];
+      const right = () => [x + cell, y + cell * (lv - b) / (cc - b)];
+      const bottom = () => [x + cell * (lv - d) / (cc - d), y + cell];
+      const left = () => [x, y + cell * (lv - a) / (d - a)];
+      const seg = (p, q) => { path.moveTo(p[0], p[1]); path.lineTo(q[0], q[1]); };
+      switch (idx) {
+        case 1: case 14: seg(left(), bottom()); break;
+        case 2: case 13: seg(bottom(), right()); break;
+        case 3: case 12: seg(left(), right()); break;
+        case 4: case 11: seg(top(), right()); break;
+        case 6: case 9: seg(top(), bottom()); break;
+        case 7: case 8: seg(left(), top()); break;
+        case 5: seg(left(), top()); seg(bottom(), right()); break;
+        case 10: seg(left(), bottom()); seg(top(), right()); break;
+      }
+    }
+  }
+  c.lineCap = "round";
+  c.strokeStyle = `rgba(${THEME.a1},.075)`; c.lineWidth = 1; c.stroke(minor);
+  c.strokeStyle = `rgba(${THEME.a2},.16)`; c.lineWidth = 1.4; c.stroke(master);
+}
+let _topoTimer = null;
+window.addEventListener("resize", () => { clearTimeout(_topoTimer); _topoTimer = setTimeout(drawTopo, 150); });
+drawTopo();
+
+/* ---------------------------------------------------------- orbe : brume blanche du petit matin */
+function sizeOrb() {
+  const r = orb.getBoundingClientRect();
+  orb.width = r.width * devicePixelRatio; orb.height = r.height * devicePixelRatio;
+}
+window.addEventListener("resize", sizeOrb); sizeOrb();
+
+function level(analyser) {
+  if (!analyser) return 0;
+  const buf = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteFrequencyData(buf);
+  let s = 0; for (const v of buf) s += v;
+  return s / buf.length / 255;
+}
+
+// Nappes de brume : des volutes douces qui dérivent lentement autour du centre.
+const MIST = (() => {
+  const rnd = rng(611);
+  const puffs = [];
+  for (let i = 0; i < 22; i++) {
+    puffs.push({
+      orbit: 0.15 + rnd() * 0.4,         // distance au centre (× R)
+      size: 0.5 + rnd() * 0.55,           // rayon de la volute (× R)
+      ang: rnd() * TAU,
+      speed: (0.04 + rnd() * 0.07) * (rnd() < 0.5 ? -1 : 1),
+      flat: 0.55 + rnd() * 0.25,          // la brume s'étire à l'horizontale
+      alpha: 0.035 + rnd() * 0.04,
+      breathe: rnd() * TAU,
+    });
+  }
+  const wisps = [];                       // filaments horizontaux qui traversent
+  for (let i = 0; i < 8; i++) {
+    wisps.push({ y: (rnd() - 0.5) * 1.1, len: 1.1 + rnd() * 0.9, thick: 0.12 + rnd() * 0.12,
+                 speed: (0.02 + rnd() * 0.035) * (rnd() < 0.3 ? -1 : 1), x: rnd() * 2.4 - 1.2,
+                 alpha: 0.04 + rnd() * 0.04 });
+  }
+  return { puffs, wisps };
+})();
+const MIST_RGB = "236,243,238";            // blanc très légèrement verdi, jamais pur
+let t = 0, eIn = 0, eOut = 0, swirl = 0, ripples = [], lastRipple = 0;
+
+function draw() {
+  requestAnimationFrame(draw);
+  t += 0.016;
+  const w = orb.width, h = orb.height, cx = w / 2, cy = h / 2;
+  const dpr = devicePixelRatio;
+  ctx.clearRect(0, 0, w, h);
+
+  // niveaux lissés : aucun sursaut brusque
+  eIn += (level(analyserIn) - eIn) * 0.08;
+  eOut += (level(analyserOut) - eOut) * 0.1;
+  const R = Math.min(w, h) * 0.24;
+
+  const idle = orbMode === "idle";
+  const swirlSpeed = orbMode === "thinking" ? 0.9 : 0.25;
+  swirl += 0.016 * swirlSpeed;
+  const swell = 1 + eOut * 0.45 + (orbMode === "thinking" ? 0.06 * Math.sin(t * 1.6) : 0);
+  const gather = 1 - eIn * 0.6;            // quand tu parles, la brume se resserre et s'éclaire
+  const bright = (idle ? 0.8 : 1) * (1 + eIn * 0.7 + eOut * 0.4);
+
+  ctx.save();
+  ctx.globalCompositeOperation = "screen";
+
+  // cœur lumineux très doux
+  let g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 1.1);
+  g.addColorStop(0, `rgba(${MIST_RGB},${0.13 * bright})`);
+  g.addColorStop(0.5, `rgba(${MIST_RGB},${0.07 * bright})`);
+  g.addColorStop(1, `rgba(${MIST_RGB},0)`);
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R * 1.1, 0, TAU); ctx.fill();
+
+  // volutes
+  for (const p of MIST.puffs) {
+    const a = p.ang + swirl * p.speed * 6;
+    const orbit = p.orbit * R * gather * (1 + 0.08 * Math.sin(t * 0.4 + p.breathe));
+    const x = cx + Math.cos(a) * orbit;
+    const y = cy + Math.sin(a) * orbit * 0.62;
+    const s = p.size * R * swell * (1 + 0.1 * Math.sin(t * 0.5 + p.breathe));
+    ctx.save();
+    ctx.translate(x, y); ctx.scale(1, p.flat);
+    g = ctx.createRadialGradient(0, 0, 0, 0, 0, s);
+    const al = Math.min(0.32, p.alpha * bright);
+    g.addColorStop(0, `rgba(${MIST_RGB},${al})`);
+    g.addColorStop(0.45, `rgba(${MIST_RGB},${al * 0.45})`);
+    g.addColorStop(1, `rgba(${MIST_RGB},0)`);
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, s, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+
+  // filaments qui glissent à l'horizontale, estompés vers les bords
+  for (const wsp of MIST.wisps) {
+    wsp.x += 0.016 * wsp.speed * (1 + eOut * 3);
+    if (wsp.x > 1.4) wsp.x = -1.4;
+    if (wsp.x < -1.4) wsp.x = 1.4;
+    const x = cx + wsp.x * R * 1.2, y = cy + wsp.y * R;
+    const edge = Math.max(0, 1 - Math.abs(wsp.x) / 1.4);
+    ctx.save();
+    ctx.translate(x, y); ctx.scale(wsp.len, wsp.thick);
+    g = ctx.createRadialGradient(0, 0, 0, 0, 0, R);
+    g.addColorStop(0, `rgba(${MIST_RGB},${wsp.alpha * edge * bright})`);
+    g.addColorStop(1, `rgba(${MIST_RGB},0)`);
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+
+  // quand VICTOR parle : des ondes douces s'élargissent dans la brume
+  if (orbMode === "speaking" && eOut > 0.04 && t - lastRipple > 0.55) {
+    ripples.push({ born: t, strength: Math.min(1, eOut * 4) });
+    lastRipple = t;
+  }
+  ripples = ripples.filter(r => t - r.born < 2.6);
+  for (const r of ripples) {
+    const k = (t - r.born) / 2.6;                       // 0 → 1
+    const rad = R * (0.6 + k * 1.1);
+    ctx.strokeStyle = `rgba(${MIST_RGB},${0.11 * r.strength * (1 - k) * (1 - k)})`;
+    ctx.lineWidth = (12 - 7 * k) * dpr;
+    ctx.shadowColor = `rgba(${MIST_RGB},.5)`; ctx.shadowBlur = 26 * dpr;
+    ctx.beginPath(); ctx.ellipse(cx, cy, rad, rad * 0.72, 0, 0, TAU); ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
+
+  // fondu vers les bords : la brume s'évanouit, aucun bord net
+  ctx.globalCompositeOperation = "destination-in";
+  g = ctx.createRadialGradient(cx, cy, Math.min(w, h) * 0.18, cx, cy, Math.min(w, h) * 0.5);
+  g.addColorStop(0, "rgba(0,0,0,1)");
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+  ctx.restore();
+}
+draw();
+
+/* ---------------------------------------------------------- voice session (Gradium + Claude, via le serveur local) */
+const RATE = 24000, FRAME = 1920;            // 80 ms à 24 kHz, format attendu par Gradium
+let ws = null, ac = null, micStream = null, workletNode = null, outGain = null;
+let playHead = 0, sources = [], idleTimer = null, newReply = true;
+
+// Capture micro -> PCM 16 bits 24 kHz mono, par paquets de 80 ms.
+const WORKLET = `
+class Capture extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.ratio = sampleRate / ${RATE};
+    this.t = 0; this.prev = 0;
+    this.buf = new Int16Array(${FRAME}); this.n = 0;
+  }
+  push(v) {
+    v = Math.max(-1, Math.min(1, v));
+    this.buf[this.n++] = v < 0 ? v * 32768 : v * 32767;
+    if (this.n === ${FRAME}) { this.port.postMessage(this.buf.slice().buffer); this.n = 0; }
+  }
+  process(inputs) {
+    const x = inputs[0] && inputs[0][0];
+    if (!x) return true;
+    const L = x.length;
+    while (this.t + 1 < L) {                     // interpolation linéaire -> 24 kHz
+      const i = Math.floor(this.t), f = this.t - i;
+      const a = i < 0 ? this.prev : x[i];
+      this.push(a + (x[i + 1] - a) * f);
+      this.t += this.ratio;
+    }
+    this.prev = x[L - 1];
+    this.t -= L;
+    return true;
+  }
+}
+registerProcessor("capture", Capture);`;
+
+async function start() {
+  if (ws) return stop();
+  statusEl.innerHTML = "<b>connexion…</b>";
+  try {
+    ac = new AudioContext();
+    outGain = ac.createGain();
+    analyserOut = ac.createAnalyser(); analyserOut.fftSize = 256;
+    outGain.connect(analyserOut); analyserOut.connect(ac.destination);
+
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: {
+        echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
+      await ac.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" })));
+      const src = ac.createMediaStreamSource(micStream);
+      analyserIn = ac.createAnalyser(); analyserIn.fftSize = 256;
+      src.connect(analyserIn);
+      workletNode = new AudioWorkletNode(ac, "capture");
+      const mute = ac.createGain(); mute.gain.value = 0;   // garde le nœud actif sans renvoyer le micro
+      src.connect(workletNode); workletNode.connect(mute); mute.connect(ac.destination);
+      workletNode.port.onmessage = (e) => { if (ws && ws.readyState === 1) ws.send(e.data); };
+    } catch (micErr) {
+      micStream = null;
+      addCard("Micro indisponible", `Le micro n'a pas pu être ouvert (${micErr.message}). Tu peux écrire à VICTOR dans le champ sous l'orbe.`, "warning");
+    }
+
+    const sock = new WebSocket(`ws://${location.host}/ws`);
+    sock.binaryType = "arraybuffer";
+    sock.onmessage = (e) => typeof e.data === "string" ? handleEvent(JSON.parse(e.data)) : playPcm(e.data);
+    await new Promise((res, rej) => { sock.onopen = res; sock.onerror = () => rej(new Error("serveur injoignable")); });
+    sock.onclose = () => {
+      if (ws === sock) { stop(); statusEl.innerHTML = `<b style="color:var(--err)">déconnecté</b> · clique l'orbe pour relancer`; }
+    };
+    ws = sock;
+  } catch (err) {
+    stop();
+    statusEl.innerHTML = `<b style="color:var(--err)">erreur</b> · ${esc(err.message)}`;
+  }
+}
+
+function stop() {
+  orbMode = "idle";
+  const sock = ws; ws = null;
+  if (sock) sock.close();
+  clearAudio();
+  if (micStream) micStream.getTracks().forEach(t => t.stop());
+  if (ac) ac.close();
+  micStream = ac = workletNode = outGain = null;
+  analyserIn = analyserOut = null;
+  setEar(false);
+  statusEl.innerHTML = "clique l'orbe pour <b>initialiser</b>";
+}
+orb.addEventListener("click", start);
+
+function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+
+/* ---------------------------------------------------------- lecture de la voix (PCM 24 kHz en flux) */
+function playPcm(buf) {
+  if (!ac) return;
+  const i16 = new Int16Array(buf);
+  if (!i16.length) return;
+  const f = new Float32Array(i16.length);
+  for (let i = 0; i < i16.length; i++) f[i] = i16[i] / 32768;
+  const ab = ac.createBuffer(1, f.length, RATE);
+  ab.copyToChannel(f, 0);
+  const s = ac.createBufferSource();
+  s.buffer = ab; s.connect(outGain);
+  const now = ac.currentTime;
+  if (playHead < now + 0.02) playHead = now + 0.06;   // petit tampon anti-saccades
+  s.start(playHead);
+  playHead += ab.duration;
+  sources.push(s);
+  clearTimeout(idleTimer);
+  s.onended = () => {
+    sources = sources.filter(x => x !== s);
+    if (!sources.length) idleTimer = setTimeout(() => { if (!sources.length) send({ type: "playback_idle" }); }, 250);
+  };
+}
+
+function clearAudio() {
+  for (const s of sources) { try { s.onended = null; s.stop(); } catch (_) {} }
+  sources = []; playHead = 0; clearTimeout(idleTimer);
+}
+
+/* ---------------------------------------------------------- événements du serveur */
+const STATES = {
+  listening: `<b>à l'écoute</b> · à votre service, monsieur`,
+  thinking: `<b>réflexion…</b>`,
+  speaking: `<b>VICTOR parle</b> · parlez pour l'interrompre`,
+};
+function setEar(open) {
+  hintEl.textContent = `SYSTÈME LOCAL · GRADIUM · CLAUDE CODE · OREILLE ${open ? "ACTIVE" : "EN VEILLE"}`;
+}
+
+function handleEvent(ev) {
+  switch (ev.type) {
+    case "state":
+      orbMode = ev.state;
+      if (STATES[ev.state]) statusEl.innerHTML = STATES[ev.state];
+      break;
+    case "ear":
+      setEar(ev.open);
+      break;
+    case "user_partial":
+    case "user_final":
+      transcriptEl.classList.add("user");
+      transcriptEl.textContent = `« ${ev.text} »`;
+      newReply = true;
+      break;
+    case "assistant_text":
+      if (newReply) { transcriptEl.textContent = ""; transcriptEl.classList.remove("user"); newReply = false; }
+      transcriptEl.textContent += ev.delta.replace(/[*#`_~]/g, "");
+      break;
+    case "assistant_done":
+      newReply = true;
+      break;
+    case "clear_audio":
+      clearAudio();
+      break;
+    case "card":
+      addCard(ev.title || "Info", ev.content || "", ev.kind || "info");
+      break;
+    case "report":
+      try { showReport(ev.report || {}); } catch (err) { addCard("Rapport", String(err), "warning"); }
+      break;
+    case "task_started":
+      addTaskCard(ev.task.id, ev.task.title);
+      break;
+    case "task_update":
+      updateTaskCard(ev.task);
+      break;
+    case "error":
+      addCard("Erreur", ev.message || "erreur inconnue", "warning");
+      break;
+  }
+}
+
+/* écrire au lieu de parler */
+document.getElementById("ask").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = e.target.querySelector("input");
+  const text = input.value.trim();
+  if (!text) return;
+  if (!ws) await start();
+  if (!ws) return;
+  clearAudio();
+  send({ type: "text", text });
+  input.value = "";
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && ws) { clearAudio(); send({ type: "interrupt" }); }
+});
+
+function cancelTask(_unused, id) { send({ type: "cancel_task", id }); }
+
+/* ---------------------------------------------------------- display cards */
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function mdLite(s) {
+  // minimal markdown: **bold**, `code`, "- " bullets
+  let html = esc(s)
+    .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+  const lines = html.split("\n");
+  let out = "", inList = false;
+  for (const l of lines) {
+    if (l.startsWith("- ")) {
+      if (!inList) { out += "<ul>"; inList = true; }
+      out += `<li>${l.slice(2)}</li>`;
+    } else {
+      if (inList) { out += "</ul>"; inList = false; }
+      out += l + "\n";
+    }
+  }
+  if (inList) out += "</ul>";
+  return out.trimEnd();
+}
+
+function addCard(title, content, kind) {
+  const el = document.createElement("div");
+  el.className = `card ${kind}`;
+  el.innerHTML = `<h3><span>${esc(title)}</span><span class="x" title="fermer">✕</span></h3>
+    <div class="body">${mdRender(content)}</div>`;
+  el.querySelector(".x").addEventListener("click", () => el.remove());
+  cardsEl.prepend(el);
+  // keep at most 6 cards
+  while (cardsEl.children.length > 6) cardsEl.lastChild.remove();
+}
+
+/* ---------------------------------------------------------- report dashboard */
+// Series palette validated for dark surfaces (CVD-safe, dataviz checks pass).
+let _apex = null, _grid = null;
+
+function mdRender(text) {
+  if (window.marked && window.DOMPurify) {
+    return DOMPurify.sanitize(marked.parse(text));
+  }
+  return mdLite(text); // offline fallback
+}
+
+function showReport(r) {
+  lastReport = r;
+  const fs = FS_STEPS[fsIdx];
+  const rep = document.getElementById("report");
+  document.getElementById("rtitle").textContent = r.title || "Rapport";
+
+  // KPI tiles
+  const kpisEl = document.getElementById("kpis");
+  kpisEl.innerHTML = "";
+  for (const k of (r.kpis || []).slice(0, 4)) {
+    const d = k.delta ? `<div class="d ${String(k.delta).trim().startsWith("-") ? "neg" : ""}">${esc(k.delta)}</div>` : "";
+    kpisEl.insertAdjacentHTML("beforeend",
+      `<div class="kpi"><div class="l">${esc(k.label)}</div><div class="v">${esc(k.value)}</div>${d}</div>`);
+  }
+
+  // Chart (ApexCharts)
+  const chartEl = document.getElementById("rchart");
+  if (_apex) { _apex.destroy(); _apex = null; }
+  chartEl.innerHTML = "";
+  const c = r.chart;
+  if (c && window.ApexCharts && (c.series || []).length) {
+    const donut = c.type === "donut";
+    const nSeries = donut ? (c.categories || []).length : c.series.length;
+    const opts = {
+      chart: { type: c.type || "line", height: Math.round(280 * Math.min(fs, 1.4)), background: "transparent",
+               toolbar: { show: false }, foreColor: THEME.dim,
+               fontFamily: "Rajdhani, sans-serif" },
+      theme: { mode: "dark" },
+      colors: THEME.series,
+      stroke: { width: 2, curve: "straight" },
+      grid: { borderColor: `rgba(${THEME.a1},.12)`, strokeDashArray: 3 },
+      dataLabels: { enabled: false },
+      legend: { show: nSeries > 1, labels: { colors: THEME.text }, fontSize: `${Math.round(13 * fs)}px` },
+      tooltip: { theme: "dark", style: { fontSize: `${Math.round(12 * fs)}px` } },
+      yaxis: { labels: { style: { fontSize: `${Math.round(12 * fs)}px` } } },
+      series: donut ? c.series[0].data : c.series,
+    };
+    if (donut) opts.labels = c.categories || [];
+    else opts.xaxis = { categories: c.categories || [], labels: { style: { fontSize: `${Math.round(12 * fs)}px` } } };
+    if (c.type === "area") opts.fill = { type: "gradient", gradient: { opacityFrom: .3, opacityTo: .02 } };
+    _apex = new ApexCharts(chartEl, opts);
+    _apex.render();
+  }
+
+  // Table (Grid.js)
+  const tableEl = document.getElementById("rtable");
+  if (_grid) { _grid.destroy(); _grid = null; }
+  tableEl.innerHTML = "";
+  const t = r.table;
+  if (t && window.gridjs && (t.rows || []).length) {
+    _grid = new gridjs.Grid({
+      columns: t.columns || [],
+      data: t.rows,
+      sort: true,
+      search: t.rows.length > 8,
+      pagination: t.rows.length > 12 ? { limit: 10 } : false,
+      style: { table: { "font-family": "Rajdhani, sans-serif" } },
+    });
+    _grid.render(tableEl);
+  }
+
+  // Markdown notes
+  document.getElementById("rmd").innerHTML = r.markdown ? mdRender(r.markdown) : "";
+
+  rep.classList.add("open");
+}
+
+/* ---------------------------------------------------------- task cards */
+function addTaskCard(id, title) {
+  emptyEl && emptyEl.remove();
+  const el = document.createElement("div");
+  el.className = "task"; el.id = `task-${id}`;
+  el.innerHTML = `<div class="t">${esc(title)}</div>
+    <div class="s"><span class="dot"></span><span class="lbl">Claude Code travaille…</span> <span class="chrono">0s</span>
+    <span class="cancel" title="annuler">✕</span></div>
+    <div class="out"></div>`;
+  el.querySelector(".cancel").addEventListener("click", () => cancelTask(null, id));
+  tasksEl.prepend(el);
+  el.dataset.start = Date.now();
+  el._timer = setInterval(() => {
+    el.querySelector(".chrono").textContent = Math.round((Date.now() - el.dataset.start) / 1000) + "s";
+  }, 1000);
+}
+
+function updateTaskCard(task) {
+  const el = document.getElementById(`task-${task.id}`);
+  if (!el) return;
+  if (task.status !== "running") {
+    clearInterval(el._timer);
+    const cls = { done: "done", cancelled: "cancelled" }[task.status] || "error";
+    const lbl = { done: "Terminé", cancelled: "Annulée" }[task.status] || "Erreur";
+    el.classList.add(cls);
+    el.querySelector(".lbl").textContent = lbl;
+    el.querySelector(".out").textContent = (task.output || "").slice(0, 1200);
+    const c = el.querySelector(".cancel"); if (c) c.remove();
+  }
+}
+</script>
+</body>
+</html>

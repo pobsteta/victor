@@ -1,0 +1,17 @@
+[project]
+name = "victor-local"
+version = "1.0.0"
+description = "VICTOR : assistant vocal local (Gradium + Claude + Claude Code)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "websockets>=13",
+    "anthropic>=0.40",
+    "pydantic>=2.6",
+]
+
+[tool.uv]
+package = false
