@@ -92,6 +92,44 @@ TASK_TIMEOUT = int(env_float("VICTOR_TASK_TIMEOUT", 600))
 PORT = int(env_float("VICTOR_PORT", 8788))
 MAX_HISTORY = 40
 
+
+def _paires(raw: str) -> list[tuple[str, str]]:
+    """Découpe « nom:valeur;nom:valeur » (seul le premier « : » sépare : C:/… reste entier)."""
+    out = []
+    for item in (raw or "").split(";"):
+        nom, sep, val = item.partition(":")
+        nom, val = nom.strip().lower(), val.strip()
+        if sep and nom and val:
+            out.append((nom, val))
+    return out
+
+
+def parse_espaces(raw: str, desc_raw: str, workdir: str) -> tuple[dict, str]:
+    """Espaces de travail AIGORA : nom -> {"path", "desc"}, plus le nom de l'espace par défaut.
+
+    Sans VICTOR_ESPACES, un seul espace « defaut » = VICTOR_WORKDIR (comportement d'origine).
+    Sinon VICTOR_WORKDIR reste le défaut, ajouté comme « defaut » s'il n'est pas déjà listé.
+    Les espaces dont le dossier n'existe pas sont ignorés avec un avertissement.
+    """
+    descs = dict(_paires(desc_raw))
+    espaces = {}
+    for nom, chemin in _paires(raw):
+        chemin = os.path.expanduser(chemin)
+        if not os.path.isdir(chemin):
+            print(f"  ⚠  espace « {nom} » ignoré : dossier introuvable ({chemin})")
+            continue
+        espaces[nom] = {"path": chemin, "desc": descs.get(nom, "")}
+    reel = os.path.realpath(workdir)
+    defaut = next((n for n, e in espaces.items() if os.path.realpath(e["path"]) == reel), None)
+    if defaut is None:
+        defaut = "defaut"
+        espaces[defaut] = {"path": workdir, "desc": descs.get(defaut, "dossier de travail par défaut")}
+    return espaces, defaut
+
+
+ESPACES, ESPACE_DEFAUT = parse_espaces(os.environ.get("VICTOR_ESPACES", ""),
+                                       os.environ.get("VICTOR_ESPACES_DESC", ""), WORKDIR)
+
 LANG_NAMES = {"fr": "français", "en": "anglais", "es": "espagnol", "de": "allemand", "pt": "portugais"}
 
 INSTRUCTIONS = f"""Tu es VICTOR, l'assistant vocal personnel de {TITLE}, dans l'esprit
@@ -137,6 +175,17 @@ données chiffrées structurées pour pouvoir remplir le rapport.
 
 Ne réponds jamais de mémoire à une question qui demande des données réelles :
 délègue. Ne lis jamais de longues listes : résume."""
+
+if len(ESPACES) > 1:
+    INSTRUCTIONS += "\n\nTes tâches Claude Code peuvent tourner dans plusieurs espaces de travail :\n"
+    INSTRUCTIONS += "\n".join(f"- {n}{' : ' + e['desc'] if e['desc'] else ''}"
+                               for n, e in ESPACES.items())
+    INSTRUCTIONS += f"""
+Passe le bon nom dans le paramètre espace de delegate_to_claude.
+L'utilisateur peut le nommer ("côté dev", "dans l'aigora business") ; sinon,
+déduis-le du sujet de la demande. Dans le doute, demande-le en une phrase
+courte avant de déléguer. Sans précision possible, l'espace par défaut est
+« {ESPACE_DEFAUT} »."""
 
 TOOLS = [{
     "name": "delegate_to_claude",
@@ -265,6 +314,11 @@ TOOLS = [{
     },
 }]
 # Mise en cache du prompt système + outils : moins cher et plus rapide à chaque tour.
+if len(ESPACES) > 1:
+    TOOLS[0]["input_schema"]["properties"]["espace"] = {
+        "type": "string", "enum": list(ESPACES),
+        "description": f"Workspace (folder) where Claude Code runs. Default: {ESPACE_DEFAUT}",
+    }
 TOOLS[-1]["cache_control"] = {"type": "ephemeral"}
 SYSTEM = [{"type": "text", "text": INSTRUCTIONS, "cache_control": {"type": "ephemeral"}}]
 
@@ -327,7 +381,7 @@ def _kill_tree(proc):
             proc.kill()
 
 
-def _run_task(task_id: str, prompt: str):
+def _run_task(task_id: str, prompt: str, cwd: str):
     task = TASKS[task_id]
     try:
         # shutil.which respecte PATHEXT : trouve aussi claude.cmd sous Windows.
@@ -340,7 +394,7 @@ def _run_task(task_id: str, prompt: str):
         extra = {"creationflags": CREATE_NO_WINDOW} if IS_WINDOWS else {"start_new_session": True}
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
-            text=True, encoding="utf-8", errors="replace", cwd=WORKDIR, **extra,
+            text=True, encoding="utf-8", errors="replace", cwd=cwd, **extra,
         )
         PROCS[task_id] = proc
         try:
@@ -368,13 +422,17 @@ def _run_task(task_id: str, prompt: str):
     task["ended"] = time.time()
 
 
-def start_task(title: str, prompt: str) -> dict:
+def start_task(title: str, prompt: str, espace: str | None = None) -> dict:
+    espace = (espace or "").strip().lower()
+    if espace not in ESPACES:
+        espace = ESPACE_DEFAUT
     task_id = uuid.uuid4().hex[:8]
     TASKS[task_id] = {
-        "id": task_id, "title": title, "prompt": prompt,
+        "id": task_id, "title": title, "prompt": prompt, "espace": espace,
         "status": "running", "output": "", "started": time.time(), "ended": None,
     }
-    threading.Thread(target=_run_task, args=(task_id, prompt), daemon=True).start()
+    threading.Thread(target=_run_task, args=(task_id, prompt, ESPACES[espace]["path"]),
+                     daemon=True).start()
     return TASKS[task_id]
 
 
@@ -1187,10 +1245,11 @@ class Session:
     async def run_tool(self, name: str, args: dict) -> dict:
         try:
             if name == "delegate_to_claude":
-                task = start_task(args.get("title") or "Tâche", args.get("prompt") or "")
-                self.emit({"type": "task_started", "task": task})
+                task = start_task(args.get("title") or "Tâche", args.get("prompt") or "",
+                                  args.get("espace"))
+                self.emit({"type": "task_started", "task": task, "multi_espaces": len(ESPACES) > 1})
                 self.spawn(self.watch_task(task["id"]))
-                return {"status": "started", "task_id": task["id"]}
+                return {"status": "started", "task_id": task["id"], "espace": task["espace"]}
             if name == "open_app":
                 self.emit({"type": "card", "title": "Lancement", "kind": "info",
                            "content": f"Ouverture de **{args.get('name', '')}**"

@@ -223,6 +223,26 @@ retenue.
 
 ---
 
+## 🗂️ Plusieurs assistants AIGORA
+
+Un seul VICTOR peut lancer ses tâches Claude Code dans plusieurs dossiers
+(par exemple un espace « business » et un espace « dev »), chacun avec son
+propre `CLAUDE.md`, ses skills et ses connecteurs. Déclare-les dans `.env` :
+
+```
+VICTOR_ESPACES=business:~/dev/aigora/aigora-business;dev:~/dev/aigora/aigora-dev
+VICTOR_ESPACES_DESC=business:mails kSuite, agenda, Odoo, prospection;dev:code R et Python, QGIS, revue de code
+```
+
+Dis « côté dev, … » ou « dans l'aigora business, … » ; sinon VICTOR choisit
+l'espace d'après le sujet, et te le demande en cas de doute. Le nom de
+l'espace s'affiche sur chaque session, à droite de l'interface.
+`VICTOR_WORKDIR` reste l'espace par défaut (nommé « defaut » s'il ne fait pas
+partie de la liste). Un espace dont le dossier n'existe pas est ignoré, avec
+un avertissement dans la console au démarrage.
+
+---
+
 ## 🔧 Personnalisation (fichier `.env`)
 
 | Variable | Défaut | Rôle |
@@ -241,6 +261,8 @@ retenue.
 | `VICTOR_MIC_THRESHOLD` | `0.02` | Niveau sonore qui réveille l'oreille (0 = toujours active) |
 | `VICTOR_STT_IDLE_CLOSE` | `8` | Secondes de silence avant mise en veille de l'oreille |
 | `VICTOR_WORKDIR` | dossier utilisateur | Où travaillent les sessions Claude Code |
+| `VICTOR_ESPACES` | *(vide)* | Plusieurs espaces de travail : `nom:chemin;nom:chemin` |
+| `VICTOR_ESPACES_DESC` | *(vide)* | Une phrase par espace pour aider VICTOR à choisir : `nom:description;…` |
 | `VICTOR_TASK_TIMEOUT` | `600` | Durée max d'une tâche (secondes) |
 | `VICTOR_PERMISSION_MODE` | `bypassPermissions` | Autorisations des sessions Claude Code (voir Sécurité) |
 | `VICTOR_PORT` | `8788` | Port du serveur local |

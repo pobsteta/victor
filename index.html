@@ -160,6 +160,12 @@
     animation: materialize .35s ease;
   }
   .task .t { font-size: calc(14px * var(--fs)); font-weight: 600; margin-bottom: 6px; letter-spacing: .04em; }
+  .task .esp {
+    display: inline-block; margin-left: 6px; padding: 0 6px; vertical-align: 2px;
+    font-family: var(--font-mono); font-size: calc(10px * var(--fs)); font-weight: 400;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--amber);
+    border: 1px solid rgba(var(--a2),.35); background: rgba(var(--a2),.06);
+  }
   .task .s { font-size: calc(11px * var(--fs)); color: var(--dim); display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); }
   .task .out { font-size: calc(11px * var(--fs)); color: var(--text2); margin-top: 8px; max-height: calc(120px * var(--fs)); overflow: auto; white-space: pre-wrap; font-family: var(--font-mono); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 8px var(--cyan); animation: blink 1s infinite alternate; }
@@ -718,7 +724,7 @@ function handleEvent(ev) {
       try { showReport(ev.report || {}); } catch (err) { addCard("Rapport", String(err), "warning"); }
       break;
     case "task_started":
-      addTaskCard(ev.task.id, ev.task.title);
+      addTaskCard(ev.task.id, ev.task.title, ev.multi_espaces ? ev.task.espace : null);
       break;
     case "task_update":
       updateTaskCard(ev.task);
@@ -863,11 +869,12 @@ function showReport(r) {
 }
 
 /* ---------------------------------------------------------- task cards */
-function addTaskCard(id, title) {
+function addTaskCard(id, title, espace) {
   emptyEl.remove();
   const el = document.createElement("div");
   el.className = "task"; el.id = `task-${id}`;
-  el.innerHTML = `<div class="t">${esc(title)}</div>
+  const badge = espace ? `<span class="esp" title="espace de travail">${esc(espace)}</span>` : "";
+  el.innerHTML = `<div class="t">${esc(title)}${badge}</div>
     <div class="s"><span class="dot"></span><span class="lbl">Claude Code travaille…</span> <span class="chrono">0s</span>
     <span class="cancel" title="annuler">✕</span></div>
     <div class="out"></div>`;
