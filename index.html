@@ -700,10 +700,16 @@ function clearAudio() {
 
 /* ---------------------------------------------------------- événements du serveur */
 const STATES = {
-  listening: `<b>à l'écoute</b> · à votre service, monsieur`,
+  listening: `<b>à l'écoute</b> · à votre service, monsieur`,  // titre remplacé par /api/settings
   thinking: `<b>réflexion…</b>`,
   speaking: `<b>VICTOR parle</b> · parlez pour l'interrompre`,
 };
+fetch("/api/settings").then(r => r.json()).then(d => {
+  const titre = (d.values && d.values.VICTOR_TITRE) || "monsieur";
+  STATES.listening = `<b>à l'écoute</b> · à votre service, ${esc(titre)}`;
+  if (orbMode === "listening") statusEl.innerHTML = STATES.listening;
+}).catch(() => {});
+
 function setEar(open) {
   hintEl.textContent = `SYSTÈME LOCAL · GRADIUM · CLAUDE CODE · OREILLE ${open ? "ACTIVE" : "EN VEILLE"}`;
 }

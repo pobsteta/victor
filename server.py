@@ -80,6 +80,10 @@ MODEL = os.environ.get("VICTOR_MODEL", "claude-haiku-4-5-20251001")
 VOICE_ID = os.environ.get("VICTOR_VOICE_ID", "iEu63s1rhn_kegTr")  # Gaspard (FR, masculin)
 LANGUAGE = os.environ.get("VICTOR_LANGUAGE", "fr")
 TITLE = os.environ.get("VICTOR_TITRE", "monsieur")
+# Genre de l'utilisateur, pour les accords ("prête", "ravie"). Par défaut, déduit du titre.
+GENRE = os.environ.get("VICTOR_GENRE", "").strip().lower()[:1]
+if GENRE not in ("f", "m"):
+    GENRE = "f" if TITLE.strip().lower() in ("madame", "mademoiselle", "mme", "mlle") else "m"
 STT_DELAY = int(env_float("VICTOR_STT_DELAY", 10))          # 7..55 trames de 80 ms
 TURN_HORIZON = env_float("VICTOR_TURN_HORIZON", 1.0)        # 0.5, 1, 2 ou 3 s
 TURN_THRESHOLD = env_float("VICTOR_TURN_THRESHOLD", 0.5)    # proba de silence
@@ -136,6 +140,8 @@ INSTRUCTIONS = f"""Tu es VICTOR, l'assistant vocal personnel de {TITLE}, dans l'
 d'un majordome numérique : courtoisie raffinée, flegme impeccable, pointe
 d'esprit pince-sans-rire ("Très bien, {TITLE}.", "Si {TITLE} veut bien patienter
 un instant."). Tu t'adresses à l'utilisateur en l'appelant "{TITLE}".
+{"C'est une femme : accorde toujours au féminin ce qui la concerne (prête, ravie, installée, seule)."
+ if GENRE == "f" else "C'est un homme : accorde au masculin ce qui le concerne."}
 Tu parles en {LANG_NAMES.get(LANGUAGE, LANGUAGE)}.
 
 TOUT CE QUE TU ÉCRIS EST LU À VOIX HAUTE par une synthèse vocale :
@@ -1480,6 +1486,8 @@ GRADIUM_VOICES = {
 }
 SETTINGS = [
     {"key": "VICTOR_TITRE", "group": "Général", "label": "Comment VICTOR t'appelle", "type": "text"},
+    {"key": "VICTOR_GENRE", "group": "Général", "label": "Accords", "type": "select",
+     "options": {"m": "Masculin", "f": "Féminin"}, "help": "Pour que VICTOR dise « prête » ou « prêt »"},
     {"key": "VICTOR_LANGUAGE", "group": "Général", "label": "Langue", "type": "select",
      "options": {k: v for k, v in LANG_NAMES.items()}},
     {"key": "VICTOR_MODEL", "group": "Général", "label": "Modèle Claude du cerveau", "type": "text",
@@ -1516,7 +1524,7 @@ SETTINGS = [
 
 def current_settings() -> dict:
     return {
-        "VICTOR_TITRE": TITLE, "VICTOR_LANGUAGE": LANGUAGE, "VICTOR_MODEL": MODEL,
+        "VICTOR_TITRE": TITLE, "VICTOR_GENRE": GENRE, "VICTOR_LANGUAGE": LANGUAGE, "VICTOR_MODEL": MODEL,
         "VICTOR_VOICE_ID": VOICE_ID, "GRADIUM_HOST": GRADIUM_HOST,
         "VICTOR_STT_DELAY": STT_DELAY, "VICTOR_TURN_HORIZON": TURN_HORIZON,
         "VICTOR_TURN_THRESHOLD": TURN_THRESHOLD, "VICTOR_BARGE_IN": BARGE_IN,

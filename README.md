@@ -250,6 +250,7 @@ un avertissement dans la console au démarrage.
 | `GRADIUM_API_KEY` | *(requis)* | Clé Gradium (oreille + voix) |
 | `ANTHROPIC_API_KEY` | *(requis)* | Clé API Anthropic (cerveau) |
 | `VICTOR_TITRE` | `monsieur` | Comment VICTOR t'appelle |
+| `VICTOR_GENRE` | selon le titre | Accords au masculin (`m`) ou au féminin (`f`) |
 | `VICTOR_VOICE_ID` | Gaspard | Voix Gradium (liste dans `.env.example`) |
 | `VICTOR_LANGUAGE` | `fr` | Langue (fr, en, es, de, pt) |
 | `VICTOR_MODEL` | `claude-haiku-4-5-20251001` | Modèle Claude du cerveau |
