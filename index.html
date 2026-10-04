@@ -68,6 +68,8 @@
   #fontctl button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
   #fontctl button:disabled { opacity: .35; cursor: default; }
   #fs-val { min-width: 42px; text-align: center; }
+  #fullscreen { margin-right: 8px; }
+  #fullscreen[aria-pressed="true"] { border-color: var(--cyan); color: var(--cyan); }
   #topbar .sys { color: var(--cyan); text-shadow: 0 0 12px rgba(var(--a1),.8); }
   #clock { color: var(--amber); }
 
@@ -270,7 +272,7 @@
   <div class="corner bl"></div><div class="corner br"></div>
   <div id="topbar">
     <span class="sys">◈ V.I.C.T.O.R. — MARK I</span>
-    <span id="fontctl" role="group" aria-label="Taille du texte"><button type="button" id="fs-down" title="Réduire le texte" aria-label="Réduire la taille du texte">A−</button><span id="fs-val" aria-live="polite">100 %</span><button type="button" id="fs-up" title="Agrandir le texte" aria-label="Agrandir la taille du texte">A+</button><button type="button" id="gear" title="Réglages" aria-label="Réglages" aria-expanded="false" aria-controls="settings">⚙</button></span>
+    <span id="fontctl" role="group" aria-label="Affichage"><button type="button" id="fullscreen" title="Plein écran" aria-label="Passer en plein écran" aria-pressed="false">⛶</button><button type="button" id="fs-down" title="Réduire le texte" aria-label="Réduire la taille du texte">A−</button><span id="fs-val" aria-live="polite">100 %</span><button type="button" id="fs-up" title="Agrandir le texte" aria-label="Agrandir la taille du texte">A+</button><button type="button" id="gear" title="Réglages" aria-label="Réglages" aria-expanded="false" aria-controls="settings">⚙</button></span>
     <span id="clock">--:--:--</span>
   </div>
 
@@ -352,6 +354,20 @@ document.getElementById("fs-up").addEventListener("click", () => applyFontSize(f
   try { saved = localStorage.getItem("victor-fs"); } catch (_) {}
   applyFontSize(saved === null ? 1 : parseInt(saved, 10) || 1);
 })();
+
+/* ---------------------------------------------------------- plein écran */
+const fullBtn = document.getElementById("fullscreen");
+if (!document.fullscreenEnabled) fullBtn.hidden = true;
+fullBtn.addEventListener("click", () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch(() => {});
+});
+document.addEventListener("fullscreenchange", () => {
+  const on = !!document.fullscreenElement;
+  fullBtn.setAttribute("aria-pressed", on);
+  fullBtn.title = on ? "Quitter le plein écran" : "Plein écran";
+  fullBtn.setAttribute("aria-label", on ? "Quitter le plein écran" : "Passer en plein écran");
+});
 
 /* ---------------------------------------------------------- utilitaires de dessin */
 const TAU = Math.PI * 2;
