@@ -161,6 +161,12 @@ plusieurs appels pour installer un setup multi-écrans.
 
 Si l'utilisateur demande d'annuler une tâche en cours, appelle cancel_task.
 
+Pour ouvrir RStudio ou QGIS sur le projet d'un espace ("ouvre RStudio côté
+dev", "lance QGIS"), appelle open_project_app : il trouve tout seul où le
+logiciel est installé. Fais-le aussi AVANT de déléguer une tâche qui doit voir
+la session R ouverte (objets chargés, "le data frame que j'ai chargé") ou le
+projet QGIS ouvert (couches, cartes). Inutile pour les autres tâches.
+
 Pour coller une commande ou un texte dans une autre fenêtre ("colle ça dans le
 terminal", "écris cette commande dans la fenêtre d'à côté"), appelle
 paste_to_window. Par défaut (target "click"), dis à l'utilisateur de cliquer
@@ -231,6 +237,15 @@ TOOLS = [{
         },
         "required": ["url"],
     },
+}, {
+    "name": "open_project_app",
+    "description": ("Find where RStudio or QGIS is installed on this PC and open it on "
+                    "the project of a workspace (RStudio: its .Rproj; QGIS: its .qgz/.qgs "
+                    "if any), so Claude Code tasks can use the live R session or QGIS. "
+                    "Does nothing if already open; waits until the app has started."),
+    "input_schema": {"type": "object", "properties": {
+        "app": {"type": "string", "enum": ["rstudio", "qgis"]},
+    }, "required": ["app"]},
 }, {
     "name": "cancel_task",
     "description": ("Cancel a running Claude Code task. Omit task_id to cancel "
@@ -318,6 +333,10 @@ if len(ESPACES) > 1:
     TOOLS[0]["input_schema"]["properties"]["espace"] = {
         "type": "string", "enum": list(ESPACES),
         "description": f"Workspace (folder) where Claude Code runs. Default: {ESPACE_DEFAUT}",
+    }
+    next(t for t in TOOLS if t["name"] == "open_project_app")["input_schema"]["properties"]["espace"] = {
+        "type": "string", "enum": list(ESPACES),
+        "description": f"Workspace whose project to open. Default: {ESPACE_DEFAUT}",
     }
 TOOLS[-1]["cache_control"] = {"type": "ephemeral"}
 SYSTEM = [{"type": "text", "text": INSTRUCTIONS, "cache_control": {"type": "ephemeral"}}]
@@ -671,6 +690,142 @@ def open_target(name: str = "", url: str | None = None, monitor: str | None = No
         return res
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
+
+
+# ---------------------------------------------------------------- RStudio / QGIS sur le projet d'un espace
+
+# Où chercher chaque logiciel, et à quoi reconnaître ses processus et ses projets.
+LOGICIELS = {
+    "rstudio": {
+        "nom": "RStudio", "commandes": ["rstudio"], "menu": ["rstudio"],
+        "chemins": ["/usr/lib/rstudio/rstudio", "/opt/rstudio/rstudio", "/usr/local/bin/rstudio",
+                    "/snap/bin/rstudio", "/var/lib/flatpak/exports/bin/io.github.rstudio.RStudio"],
+        "windows": ["RStudio/rstudio.exe", "RStudio/bin/rstudio.exe"], "mac": ["RStudio.app"],
+        "processus": {"rsession"}, "projets": ["*.Rproj"],
+    },
+    "qgis": {
+        "nom": "QGIS", "commandes": ["qgis", "qgis-ltr"], "menu": ["qgis"],
+        "chemins": ["/usr/local/bin/qgis", "/opt/qgis/bin/qgis", "/snap/bin/qgis",
+                    "/var/lib/flatpak/exports/bin/org.qgis.qgis"],
+        "windows": ["QGIS*/bin/qgis-ltr-bin.exe", "QGIS*/bin/qgis-bin.exe"], "mac": ["QGIS*.app"],
+        "processus": {"qgis", "qgis.bin", "qgis-bin", "qgis-ltr-bin"}, "projets": ["*.qgz", "*.qgs"],
+    },
+}
+MENU_DIRS = [Path("/usr/share/applications"), Path("/usr/local/share/applications"),
+             Path.home() / ".local/share/applications", Path("/var/lib/snapd/desktop/applications"),
+             Path("/var/lib/flatpak/exports/share/applications"),
+             Path.home() / ".local/share/flatpak/exports/share/applications"]
+_TROUVES: dict = {}
+
+
+def _depuis_menu(mots: list) -> list | None:
+    """Commande d'un raccourci du menu des applications (.desktop) dont le nom correspond."""
+    import shlex
+    for d in MENU_DIRS:
+        for f in sorted(d.glob("*.desktop")) if d.is_dir() else []:
+            try:
+                txt = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            champs = dict(re.findall(r"^(Name|Exec|NoDisplay)=(.*)$", txt, re.M))
+            nom = (champs.get("Name", "") + " " + f.stem).lower()
+            if champs.get("Exec") and champs.get("NoDisplay") != "true" and any(m in nom for m in mots):
+                argv = [x for x in shlex.split(champs["Exec"]) if not re.fullmatch(r"%[a-zA-Z]", x)]
+                if argv and (os.path.isabs(argv[0]) or shutil.which(argv[0])):
+                    return argv
+    return None
+
+
+def trouver_logiciel(cle: str) -> list | None:
+    """Cherche où est installé un logiciel : PATH, emplacements connus, puis menu des
+    applications (Linux) ; Program Files (Windows) ; /Applications (macOS).
+    Renvoie la commande à lancer (liste), ou None."""
+    if cle in _TROUVES:
+        return _TROUVES[cle]
+    spec, argv = LOGICIELS[cle], None
+    if IS_WINDOWS:
+        racines = {os.environ.get(v) for v in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA")} - {None}
+        for motif in spec["windows"]:
+            hits = sorted(h for r in racines for h in Path(r).glob(motif))
+            if hits:
+                argv = [str(hits[-1])]  # la version la plus récente
+                break
+    elif sys.platform == "darwin":
+        for r in (Path("/Applications"), Path.home() / "Applications"):
+            hits = sorted(h for motif in spec["mac"] for h in r.glob(motif))
+            if hits:
+                argv = ["open", "-a", str(hits[-1])]
+                break
+    if argv is None:
+        exe = next((shutil.which(c) for c in spec["commandes"] if shutil.which(c)), None)
+        exe = exe or next((c for c in spec["chemins"] if os.access(c, os.X_OK)), None)
+        argv = [exe] if exe else (None if IS_WINDOWS else _depuis_menu(spec["menu"]))
+    if argv:
+        _TROUVES[cle] = argv
+    return argv
+
+
+def _processus(noms: set) -> dict:
+    """pid -> dossier de travail des processus portant l'un de ces noms (Linux)."""
+    out = {}
+    for pid in os.listdir("/proc") if os.path.isdir("/proc") else []:
+        if not pid.isdigit():
+            continue
+        try:
+            if Path(f"/proc/{pid}/comm").read_text().strip() in noms:
+                out[pid] = os.path.realpath(f"/proc/{pid}/cwd")
+        except OSError:
+            continue
+    return out
+
+
+def open_project_app(cle: str, espace: str | None = None, timeout: float = 25.0) -> dict:
+    """Ouvre RStudio ou QGIS sur le projet d'un espace (bloquant : à appeler dans un thread).
+
+    RStudio : le .Rproj de l'espace (obligatoire) ; ne rouvre pas un projet déjà ouvert et
+    attend que la session R démarre (.Rprofile la rend visible par Claude Code).
+    QGIS : le premier .qgz/.qgs de l'espace s'il y en a un, sinon QGIS seul ; une seule fenêtre.
+    """
+    if cle not in LOGICIELS:
+        return {"ok": False, "error": f"logiciel inconnu : {cle}"}
+    spec = LOGICIELS[cle]
+    espace = (espace or "").strip().lower()
+    if espace not in ESPACES:
+        espace = ESPACE_DEFAUT
+    dossier = ESPACES[espace]["path"]
+    reel = os.path.realpath(dossier)
+    projets = sorted(p for motif in spec["projets"] for p in Path(dossier).glob(motif))
+    if cle == "rstudio" and not projets:
+        return {"ok": False, "error": f"aucun projet RStudio (.Rproj) dans l'espace « {espace} »"}
+    projet = projets[0] if projets else None
+    res = {"espace": espace, "logiciel": spec["nom"], "projet": projet.name if projet else None}
+
+    def pret():
+        procs = _processus(spec["processus"])
+        return reel in procs.values() if cle == "rstudio" else bool(procs)
+
+    if not IS_WINDOWS and sys.platform != "darwin" and pret():
+        return {"ok": True, **res, "already_open": True}
+    argv = trouver_logiciel(cle)
+    if not argv:
+        return {"ok": False, **res, "error": f"{spec['nom']} est introuvable sur ce PC"}
+    try:
+        cmd = argv + ([str(projet)] if projet else [])
+        extra = {"creationflags": CREATE_NO_WINDOW} if IS_WINDOWS else {"start_new_session": True}
+        subprocess.Popen(cmd, cwd=dossier, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **extra)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, **res, "error": str(exc)}
+    res.update(ok=True, launched=True, chemin=argv[-1] if argv[0] == "open" else argv[0])
+    if cle == "qgis":
+        res["note"] = "pour que les tâches pilotent QGIS, son extension QGIS MCP doit être démarrée"
+    if IS_WINDOWS or sys.platform == "darwin":
+        return res
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pret():
+            return {**res, "ready": True}
+        time.sleep(0.5)
+    return {**res, "warning": f"{spec['nom']} est lancé mais pas encore prêt"}
 
 
 # ---------------------------------------------------------------- coller dans une autre fenêtre (Linux, ydotool)
@@ -1261,6 +1416,12 @@ class Session:
                            "content": f"Ouverture de **{args.get('url', '')}**"})
                 return await asyncio.to_thread(open_target, url=args.get("url", ""),
                                                monitor=args.get("monitor"))
+            if name == "open_project_app":
+                cle = args.get("app", "")
+                nom = LOGICIELS.get(cle, {}).get("nom", cle)
+                self.emit({"type": "card", "title": "Lancement", "kind": "info",
+                           "content": f"Ouverture de **{nom}** (espace **{args.get('espace') or ESPACE_DEFAUT}**)"})
+                return await asyncio.to_thread(open_project_app, cle, args.get("espace"))
             if name == "cancel_task":
                 res = cancel_task(args.get("task_id") or "latest")
                 if res.get("cancelled"):
