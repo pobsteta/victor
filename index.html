@@ -132,6 +132,14 @@
   }
   .card .body ul { margin: 4px 0 0 16px; }
   .card.code .body { font-family: var(--font-mono); font-size: calc(12px * var(--fs)); color: var(--text2); }
+  .card .body pre { white-space: pre-wrap; margin: 4px 0; }
+  .clip { display: flex; gap: 6px; margin: 2px 0 8px; white-space: normal; }
+  .clip button {
+    cursor: pointer; padding: 2px 8px; font-family: var(--font-mono); font-size: calc(11px * var(--fs));
+    background: rgba(var(--deep),.6); color: var(--dim); border: 1px solid var(--line);
+  }
+  .clip button:hover:not(:disabled) { color: var(--cyan); border-color: var(--cyan); }
+  .clip button:disabled { cursor: default; color: var(--amber); }
 
   /* ------------------------------------------------ right panel */
   #side {
@@ -781,6 +789,7 @@ function addCard(title, content, kind) {
   el.innerHTML = `<h3><span>${esc(title)}</span><span class="x" title="fermer">✕</span></h3>
     <div class="body">${mdRender(content)}</div>`;
   el.querySelector(".x").addEventListener("click", () => el.remove());
+  addClipButtons(el, kind);
   cardsEl.prepend(el);
   // keep at most 6 cards
   while (cardsEl.children.length > 6) cardsEl.lastChild.remove();
@@ -866,7 +875,7 @@ function showReport(r) {
 
 /* ---------------------------------------------------------- task cards */
 function addTaskCard(id, title) {
-  emptyEl && emptyEl.remove();
+  emptyEl.remove();
   const el = document.createElement("div");
   el.className = "task"; el.id = `task-${id}`;
   el.innerHTML = `<div class="t">${esc(title)}</div>
@@ -891,8 +900,20 @@ function updateTaskCard(task) {
     el.classList.add(cls);
     el.querySelector(".lbl").textContent = lbl;
     el.querySelector(".out").textContent = (task.output || "").slice(0, 1200);
-    const c = el.querySelector(".cancel"); if (c) c.remove();
+    // la croix n'annule plus : elle retire la session terminée du panneau
+    const c = el.querySelector(".cancel");
+    if (c) {
+      c.title = "fermer";
+      c.replaceWith(c.cloneNode(true));          // retire l'écouteur « annuler »
+      el.querySelector(".cancel").addEventListener("click", () => removeTaskCard(el));
+    }
   }
+}
+
+function removeTaskCard(el) {
+  clearInterval(el._timer);
+  el.remove();
+  if (!tasksEl.querySelector(".task")) tasksEl.appendChild(emptyEl);
 }
 
 /* ---------------------------------------------------------- réglages (roue crantée) */
@@ -1026,6 +1047,50 @@ setSave.addEventListener("click", async () => {
   }
   setMsg.style.color = "var(--err)"; setMsg.textContent = "le serveur ne répond plus : relance-le à la main";
 });
+
+/* ---------------------------------------------------------- copier / coller dans une autre fenêtre */
+// Sous chaque bloc de code d'une carte : copier, ou coller dans une autre fenêtre
+// (le serveur passe par le presse-papiers et ydotool, après 3 s pour cliquer la cible).
+function addClipButtons(card, kind) {
+  const blocks = [...card.querySelectorAll(".body pre")];
+  if (!blocks.length && kind === "code") blocks.push(card.querySelector(".body"));
+  for (const block of blocks) {
+    const text = () => block.innerText.replace(/\n$/, "");
+    const bar = document.createElement("div");
+    bar.className = "clip";
+    bar.innerHTML = `<button type="button" data-act="copy" title="Copier dans le presse-papiers">⧉ copier</button>
+      <button type="button" data-act="term" title="Coller dans un terminal (Ctrl+Maj+V) : clique dans la fenêtre dans les 3 s">⇥ terminal</button>
+      <button type="button" data-act="app" title="Coller dans une application (Ctrl+V) : clique dans la fenêtre dans les 3 s">⇥ appli</button>`;
+    bar.addEventListener("click", (e) => {
+      const b = e.target.closest("button");
+      if (b) clipAction(b, b.dataset.act, text());
+    });
+    block.after(bar);
+  }
+}
+
+async function clipAction(btn, act, text) {
+  const label = btn.textContent;
+  const flash = (msg, ms = 1500) => { btn.textContent = msg; setTimeout(() => { btn.textContent = label; btn.disabled = false; }, ms); };
+  btn.disabled = true;
+  if (act === "copy") {
+    try { await navigator.clipboard.writeText(text); flash("✓ copié"); } catch (_) { flash("✗ refusé"); }
+    return;
+  }
+  let n = 3;
+  btn.textContent = `clique la cible… ${n}`;
+  const tick = setInterval(() => { if (--n > 0) btn.textContent = `clique la cible… ${n}`; }, 1000);
+  try {
+    const r = await fetch("/api/paste", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, target: "click", terminal: act === "term", delay: 3 }) });
+    const res = await r.json();
+    clearInterval(tick);
+    if (res.ok) flash("✓ collé");
+    else { flash("✗ échec", 2500); addCard("Collage impossible", res.error || "erreur inconnue", "warning"); }
+  } catch (err) {
+    clearInterval(tick); flash("✗ échec", 2500);
+  }
+}
 </script>
 </body>
 </html>

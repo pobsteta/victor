@@ -123,6 +123,12 @@ plusieurs appels pour installer un setup multi-écrans.
 
 Si l'utilisateur demande d'annuler une tâche en cours, appelle cancel_task.
 
+Pour coller une commande ou un texte dans une autre fenêtre ("colle ça dans le
+terminal", "écris cette commande dans la fenêtre d'à côté"), appelle
+paste_to_window. Par défaut (target "click"), dis à l'utilisateur de cliquer
+dans la fenêtre voulue : le collage a lieu trois secondes après. N'appuie sur
+Entrée (enter) que si l'utilisateur demande explicitement d'exécuter.
+
 Pour MONTRER quelque chose (résultat, liste, tableau, code, définition),
 appelle display_card et garde la réponse vocale courte. Pour une analyse de
 données ou un rapport chiffré, appelle display_report (kpis, chart, table).
@@ -185,6 +191,27 @@ TOOLS = [{
         "properties": {
             "task_id": {"type": "string", "description": "Task id to cancel (optional)"},
         },
+    },
+}, {
+    "name": "paste_to_window",
+    "description": ("Paste text (typically a shell command) into another application "
+                    "window on this PC, through the clipboard and a simulated "
+                    "paste shortcut."),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "description": "Exact text to paste"},
+            "target": {"type": "string", "enum": ["click", "previous", "current"],
+                       "description": ("'click' (default): wait 3 s so the user can click "
+                                       "the target window; 'previous': switch to the "
+                                       "previously used window with Alt+Tab; 'current': "
+                                       "paste right away into the focused window.")},
+            "terminal": {"type": "boolean",
+                         "description": "True if the target is a terminal (uses Ctrl+Shift+V)"},
+            "enter": {"type": "boolean",
+                      "description": "Press Enter after pasting. Only if the user explicitly asks to run it."},
+        },
+        "required": ["text"],
     },
 }, {
     "name": "display_card",
@@ -586,6 +613,82 @@ def open_target(name: str = "", url: str | None = None, monitor: str | None = No
         return res
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
+
+
+# ---------------------------------------------------------------- coller dans une autre fenêtre (Linux, ydotool)
+
+# Le texte passe par le presse-papiers puis on simule le raccourci « coller » :
+# `ydotool type` taperait en QWERTY et casserait les caractères sur un clavier AZERTY.
+# Codes de touches Linux (input-event-codes.h), indépendants de la disposition.
+KEYCODES = {"ctrl": 29, "shift": 42, "alt": 56, "tab": 15, "v": 47, "enter": 28}
+PASTE_TARGETS = ("click", "previous", "current")
+
+
+def _press(*keys):
+    """Appuie sur une combinaison (ex. ctrl+v) via ydotool."""
+    codes = [KEYCODES[k] for k in keys]
+    args = [f"{c}:1" for c in codes] + [f"{c}:0" for c in reversed(codes)]
+    subprocess.run(["ydotool", "key", *args], check=True, capture_output=True, timeout=5)
+
+
+def _copy_to_clipboard(text: str):
+    if os.environ.get("WAYLAND_DISPLAY") and shutil.which("wl-copy"):
+        cmd = ["wl-copy"]
+    elif shutil.which("xclip"):
+        cmd = ["xclip", "-selection", "clipboard"]
+    else:
+        raise RuntimeError("ni wl-copy ni xclip n'est installé")
+    subprocess.run(cmd, input=text, text=True, check=True, timeout=5)
+
+
+def paste_to_window(text: str, target: str = "click", terminal: bool = False,
+                    enter: bool = False, delay: float = 3.0) -> dict:
+    """Colle `text` dans une autre fenêtre (bloquant : à appeler dans un thread).
+
+    target : "click"    attend `delay` s, le temps de cliquer dans la fenêtre voulue ;
+             "previous" bascule d'abord sur la fenêtre précédente (Alt+Tab) ;
+             "current"  colle tout de suite dans la fenêtre active.
+    terminal : Ctrl+Maj+V au lieu de Ctrl+V. enter : valide avec Entrée.
+    """
+    if not text:
+        return {"ok": False, "error": "texte vide"}
+    if IS_WINDOWS or sys.platform == "darwin":
+        return {"ok": False, "error": "le collage dans une autre fenêtre n'est géré que sous Linux"}
+    if not shutil.which("ydotool"):
+        return {"ok": False, "error": "ydotool n'est pas installé"}
+    if target not in PASTE_TARGETS:
+        target = "click"
+    try:
+        _copy_to_clipboard(text)
+        if target == "previous":
+            _press("alt", "tab")
+            time.sleep(0.4)
+        elif target == "click":
+            time.sleep(max(0.5, min(float(delay), 10)))
+        _press("ctrl", "shift", "v") if terminal else _press("ctrl", "v")
+        if enter:
+            time.sleep(0.15)
+            _press("enter")
+    except subprocess.CalledProcessError as exc:
+        err = (exc.stderr or b"").decode(errors="replace").strip()
+        return {"ok": False, "error": f"ydotool a échoué ({err or exc.returncode}) : ydotoold tourne-t-il ?"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "pasted_chars": len(text), "target": target, "entered": enter}
+
+
+class PasteRequest(BaseModel):
+    text: str
+    target: str = "click"
+    terminal: bool = False
+    enter: bool = False
+    delay: float = 3.0
+
+
+@app.post("/api/paste")
+async def api_paste(req: PasteRequest):
+    return await asyncio.to_thread(paste_to_window, req.text, req.target,
+                                   req.terminal, req.enter, req.delay)
 
 
 # ---------------------------------------------------------------- helpers audio / texte
@@ -1104,6 +1207,13 @@ class Session:
                 if res.get("cancelled"):
                     self.emit({"type": "task_update", "task": TASKS[res["cancelled"]]})
                 return res
+            if name == "paste_to_window":
+                target = args.get("target") or "click"
+                if target == "click":
+                    self.emit({"type": "card", "title": "Collage", "kind": "info",
+                               "content": "Clique dans la fenêtre cible : collage dans 3 secondes."})
+                return await asyncio.to_thread(paste_to_window, args.get("text", ""), target,
+                                               bool(args.get("terminal")), bool(args.get("enter")))
             if name == "display_card":
                 self.emit({"type": "card", "title": args.get("title", "Info"),
                            "content": args.get("content", ""), "kind": args.get("kind", "info")})
