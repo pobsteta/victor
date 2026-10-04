@@ -20,6 +20,8 @@ Routes :
   WS   /ws                la session vocale (audio binaire + événements JSON)
   GET  /api/task/{id}     état d'une tâche Claude Code
   POST /api/task/{id}/cancel
+  GET  /api/settings      réglages modifiables (roue crantée)
+  POST /api/settings      les écrit dans .env puis relance le serveur
 """
 import asyncio
 import base64
@@ -1135,6 +1137,145 @@ class Session:
 async def voice_ws(ws: WebSocket):
     await ws.accept()
     await Session(ws).run()
+
+
+# ---------------------------------------------------------------- réglages (roue crantée)
+
+# Paramètres modifiables depuis l'interface. Les clés API et le port restent
+# dans le .env uniquement (le port changerait l'adresse de la page elle-même).
+GRADIUM_VOICES = {
+    "iEu63s1rhn_kegTr": "Gaspard", "biuhvu17TxVKOcyy": "Marius", "YKeBw3OV1RgpdhLh": "Jules",
+    "25AzBFyp6svYnJsj": "Damien", "Tek4tJXiX6_yvXq7": "Augustin", "6oIkS98REoVZ1dEw": "Apolline",
+    "FXxJ9mANRq6BCTX5": "Noémie", "YhIHaAfQ0cQPDV9R": "Solène",
+}
+SETTINGS = [
+    {"key": "VICTOR_TITRE", "group": "Général", "label": "Comment VICTOR t'appelle", "type": "text"},
+    {"key": "VICTOR_LANGUAGE", "group": "Général", "label": "Langue", "type": "select",
+     "options": {k: v for k, v in LANG_NAMES.items()}},
+    {"key": "VICTOR_MODEL", "group": "Général", "label": "Modèle Claude du cerveau", "type": "text",
+     "suggest": ["claude-haiku-4-5-20251001", "claude-sonnet-5-5", "claude-opus-5-5"]},
+    {"key": "VICTOR_VOICE_ID", "group": "Gradium", "label": "Voix", "type": "select",
+     "options": GRADIUM_VOICES},
+    {"key": "GRADIUM_HOST", "group": "Gradium", "label": "Serveur", "type": "select",
+     "options": {"eu.api.gradium.ai": "Europe", "us.api.gradium.ai": "États-Unis",
+                 "api.gradium.ai": "Global"}},
+    {"key": "VICTOR_STT_DELAY", "group": "Réactivité", "label": "Délai de transcription",
+     "type": "range", "min": 7, "max": 55, "step": 1, "unit": "trames de 80 ms",
+     "help": "7 = plus rapide, 55 = plus précis"},
+    {"key": "VICTOR_TURN_HORIZON", "group": "Réactivité", "label": "Horizon de fin de phrase",
+     "type": "range", "values": [0.5, 1.0, 2.0, 3.0], "unit": "s",
+     "help": "Plus petit = réponse plus rapide, mais risque de te couper"},
+    {"key": "VICTOR_TURN_THRESHOLD", "group": "Réactivité", "label": "Seuil de silence",
+     "type": "range", "min": 0.05, "max": 0.95, "step": 0.05,
+     "help": "Probabilité de silence à partir de laquelle VICTOR répond"},
+    {"key": "VICTOR_BARGE_IN", "group": "Réactivité", "label": "Interrompre VICTOR en parlant",
+     "type": "toggle", "help": "Désactive si VICTOR s'interrompt tout seul (haut-parleurs sans casque)"},
+    {"key": "VICTOR_MIC_THRESHOLD", "group": "Économie de crédits", "label": "Seuil du micro",
+     "type": "range", "min": 0, "max": 0.1, "step": 0.005,
+     "help": "0 = transcription permanente (consomme en continu)"},
+    {"key": "VICTOR_STT_IDLE_CLOSE", "group": "Économie de crédits", "label": "Mise en veille après",
+     "type": "range", "min": 1, "max": 30, "step": 1, "unit": "s de silence"},
+    {"key": "VICTOR_WORKDIR", "group": "Claude Code", "label": "Dossier de travail", "type": "text"},
+    {"key": "VICTOR_TASK_TIMEOUT", "group": "Claude Code", "label": "Durée max d'une tâche",
+     "type": "range", "min": 60, "max": 3600, "step": 60, "unit": "s"},
+    {"key": "VICTOR_PERMISSION_MODE", "group": "Claude Code", "label": "Permissions", "type": "select",
+     "options": {"bypassPermissions": "Tout autoriser", "acceptEdits": "Fichiers seulement",
+                 "off": "Comportement d'origine"}},
+]
+
+
+def current_settings() -> dict:
+    return {
+        "VICTOR_TITRE": TITLE, "VICTOR_LANGUAGE": LANGUAGE, "VICTOR_MODEL": MODEL,
+        "VICTOR_VOICE_ID": VOICE_ID, "GRADIUM_HOST": GRADIUM_HOST,
+        "VICTOR_STT_DELAY": STT_DELAY, "VICTOR_TURN_HORIZON": TURN_HORIZON,
+        "VICTOR_TURN_THRESHOLD": TURN_THRESHOLD, "VICTOR_BARGE_IN": BARGE_IN,
+        "VICTOR_MIC_THRESHOLD": MIC_THRESHOLD, "VICTOR_STT_IDLE_CLOSE": STT_IDLE_CLOSE,
+        "VICTOR_WORKDIR": WORKDIR, "VICTOR_TASK_TIMEOUT": TASK_TIMEOUT,
+        "VICTOR_PERMISSION_MODE": PERMISSION_MODE,
+    }
+
+
+def _validate_setting(spec: dict, raw) -> str:
+    """Renvoie la valeur telle qu'elle sera écrite dans le .env, ou lève ValueError."""
+    kind = spec["type"]
+    if kind == "toggle":
+        return "1" if raw in (True, 1, "1", "true", "on") else "0"
+    if kind == "range":
+        v = float(raw)
+        if "values" in spec:
+            v = min(spec["values"], key=lambda x: abs(x - v))
+        elif not spec["min"] <= v <= spec["max"]:
+            raise ValueError(f"hors limites ({spec['min']} – {spec['max']})")
+        return f"{v:g}"
+    v = str(raw).strip()
+    if not v or any(c in v for c in "\r\n"):
+        raise ValueError("valeur vide ou invalide")
+    if kind == "select" and v not in spec["options"]:
+        raise ValueError("choix inconnu")
+    if spec["key"] == "VICTOR_WORKDIR" and not os.path.isdir(os.path.expanduser(v)):
+        raise ValueError(f"le dossier {v} n'existe pas")
+    return v
+
+
+def write_env(values: dict):
+    """Met à jour le .env en gardant ses commentaires : remplace la ligne active,
+    sinon décommente la ligne d'exemple, sinon ajoute la variable à la fin."""
+    env_file = ROOT / ".env"
+    lines = env_file.read_text(encoding="utf-8-sig").splitlines() if env_file.exists() else []
+    pending = dict(values)
+
+    def fmt(k, v):
+        return f'{k}="{v}"' if (" " in v or "#" in v) else f"{k}={v}"
+
+    for active in (True, False):
+        for i, line in enumerate(lines):
+            m = re.match(r"\s*(#\s*)?([A-Z_][A-Z0-9_]*)\s*=", line)
+            if m and m.group(2) in pending and (m.group(1) is None) == active:
+                lines[i] = fmt(m.group(2), pending.pop(m.group(2)))
+    if pending:
+        lines += ["", "# --- Réglages enregistrés depuis l'interface"]
+        lines += [fmt(k, v) for k, v in pending.items()]
+    tmp = env_file.with_suffix(".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(tmp, env_file)
+
+
+def restart_server():
+    """Relance ce processus : les nouveaux réglages sont relus au démarrage."""
+    for proc in list(PROCS.values()):
+        _kill_tree(proc)
+    if IS_WINDOWS:
+        subprocess.Popen([sys.executable] + sys.argv, cwd=ROOT)
+        os._exit(0)
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+@app.get("/api/settings")
+def api_get_settings():
+    return {"schema": SETTINGS, "values": current_settings(),
+            "busy": sum(t.get("status") == "running" for t in TASKS.values())}
+
+
+@app.post("/api/settings")
+async def api_save_settings(payload: dict):
+    specs = {s["key"]: s for s in SETTINGS}
+    clean, errors = {}, {}
+    for k, raw in payload.items():
+        if k not in specs:
+            continue
+        try:
+            clean[k] = _validate_setting(specs[k], raw)
+        except (TypeError, ValueError) as exc:
+            errors[k] = str(exc)
+    if errors:
+        raise HTTPException(422, detail=errors)
+    write_env(clean)
+    # load_env() n'écrase pas les variables déjà présentes, et le processus relancé
+    # hérite de cet environnement : on y met donc les nouvelles valeurs.
+    os.environ.update(clean)
+    asyncio.get_running_loop().call_later(0.5, restart_server)
+    return {"ok": True, "saved": clean}
 
 
 # ---------------------------------------------------------------- static
