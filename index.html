@@ -581,7 +581,7 @@ draw();
 
 /* ---------------------------------------------------------- voice session (Gradium + Claude, via le serveur local) */
 const RATE = 24000, FRAME = 1920;            // 80 ms à 24 kHz, format attendu par Gradium
-let ws = null, ac = null, micStream = null, workletNode = null, outGain = null;
+let ws = null, ac = null, micStream = null, micSrc = null, workletNode = null, outGain = null;
 let playHead = 0, sources = [], idleTimer = null, newReply = true;
 
 // Capture micro -> PCM 16 bits 24 kHz mono, par paquets de 80 ms.
@@ -625,20 +625,19 @@ async function start() {
     outGain.connect(analyserOut); analyserOut.connect(ac.destination);
 
     try {
-      micStream = await navigator.mediaDevices.getUserMedia({ audio: {
-        echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
       await ac.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" })));
-      const src = ac.createMediaStreamSource(micStream);
       analyserIn = ac.createAnalyser(); analyserIn.fftSize = 256;
-      src.connect(analyserIn);
       workletNode = new AudioWorkletNode(ac, "capture");
       const mute = ac.createGain(); mute.gain.value = 0;   // garde le nœud actif sans renvoyer le micro
-      src.connect(workletNode); workletNode.connect(mute); mute.connect(ac.destination);
+      workletNode.connect(mute); mute.connect(ac.destination);
       workletNode.port.onmessage = (e) => { if (ws && ws.readyState === 1) ws.send(e.data); };
+      await openMic(null);
     } catch (micErr) {
-      micStream = null;
+      if (micStream) micStream.getTracks().forEach(t => t.stop());
+      micStream = micSrc = null;
       addCard("Micro indisponible", `Le micro n'a pas pu être ouvert (${micErr.message}). Tu peux écrire à ${NOM} dans le champ sous l'orbe.`, "warning");
     }
+    await snapshotDevices().catch(() => {});   // référence pour repérer un casque branché ensuite
 
     const sock = new WebSocket(`ws://${location.host}/ws`);
     sock.binaryType = "arraybuffer";
@@ -661,12 +660,72 @@ function stop() {
   clearAudio();
   if (micStream) micStream.getTracks().forEach(t => t.stop());
   if (ac) ac.close();
-  micStream = ac = workletNode = outGain = null;
+  micStream = micSrc = ac = workletNode = outGain = null;
   analyserIn = analyserOut = null;
   setEar(false);
   statusEl.innerHTML = "clique l'orbe pour <b>initialiser</b>";
 }
 orb.addEventListener("click", start);
+
+/* ---------------------------------------------------------- bascule automatique sur un casque branché */
+const MIC_OPTS = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 };
+const VIRTUELS = new Set(["default", "communications", ""]);   // alias du système, pas des appareils
+let knownIn = new Set(), knownOut = new Set(), switchTimer = null;
+
+async function openMic(deviceId) {
+  const audio = deviceId ? { ...MIC_OPTS, deviceId: { exact: deviceId } } : MIC_OPTS;
+  const stream = await navigator.mediaDevices.getUserMedia({ audio });
+  if (!ac || !workletNode) { stream.getTracks().forEach(t => t.stop()); return; }  // arrêté entre-temps
+  if (micSrc) micSrc.disconnect();
+  if (micStream) micStream.getTracks().forEach(t => t.stop());
+  micStream = stream;
+  micSrc = ac.createMediaStreamSource(stream);
+  micSrc.connect(analyserIn); micSrc.connect(workletNode);
+  stream.getAudioTracks()[0].onended = scheduleSwitch;   // appareil débranché
+}
+
+async function audioDevices() {
+  const devs = await navigator.mediaDevices.enumerateDevices();
+  const pick = (kind) => devs.filter(d => d.kind === kind && !VIRTUELS.has(d.deviceId));
+  return { ins: pick("audioinput"), outs: pick("audiooutput") };
+}
+
+async function snapshotDevices() {
+  const { ins, outs } = await audioDevices();
+  knownIn = new Set(ins.map(d => d.deviceId));
+  knownOut = new Set(outs.map(d => d.deviceId));
+}
+
+// Un appareil qui APPARAÎT pendant la session (casque branché) prend la main ;
+// celui qu'on utilisait disparaît -> retour aux appareils par défaut du système.
+async function switchDevices() {
+  if (!ac || !workletNode) return;
+  const { ins, outs } = await audioDevices();
+  const newIn = ins.find(d => !knownIn.has(d.deviceId));
+  const newOut = outs.find(d => !knownOut.has(d.deviceId));
+  knownIn = new Set(ins.map(d => d.deviceId));
+  knownOut = new Set(outs.map(d => d.deviceId));
+  const track = micStream && micStream.getAudioTracks()[0];
+  const micGone = !track || track.readyState === "ended";
+  const notes = [];
+  try {
+    if (newIn) { await openMic(newIn.deviceId); notes.push(`micro : **${newIn.label || "nouvel appareil"}**`); }
+    else if (micGone && micStream) { await openMic(null); notes.push("micro : **par défaut**"); }
+  } catch (err) { notes.push(`micro non basculé (${err.message})`); }
+  if (ac && ac.setSinkId) {
+    try {
+      if (newOut) { await ac.setSinkId(newOut.deviceId); notes.push(`son : **${newOut.label || "nouvel appareil"}**`); }
+      else if (ac.sinkId && !outs.some(d => d.deviceId === ac.sinkId)) { await ac.setSinkId(""); notes.push("son : **par défaut**"); }
+    } catch (err) { notes.push(`son non basculé (${err.message})`); }
+  }
+  if (notes.length) addCard("Audio", notes.join(" · "), "info");
+}
+
+function scheduleSwitch() {   // devicechange arrive en rafale : on attend que ça se stabilise
+  clearTimeout(switchTimer);
+  switchTimer = setTimeout(() => switchDevices().catch(() => {}), 800);
+}
+if (navigator.mediaDevices) navigator.mediaDevices.addEventListener("devicechange", scheduleSwitch);
 
 function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
 
