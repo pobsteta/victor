@@ -667,6 +667,26 @@ function stop() {
 }
 orb.addEventListener("click", start);
 
+/* ---------------------------------------------------------- Néméton dans un onglet réutilisé */
+// Un onglet ouvert par cette page peut être renvoyé ailleurs par elle : changer
+// de projet ou d'onglet de l'app ne rouvre donc pas un nouvel onglet.
+let nemetonWin = null;
+function openNemeton(url) {
+  if (!/^http:\/\/127\.0\.0\.1:3838(\/|\?|$)/.test(url || "")) return;
+  try {
+    if (nemetonWin && !nemetonWin.closed) {
+      nemetonWin.location.href = url;
+      nemetonWin.focus();
+      return;
+    }
+  } catch (_) { /* onglet perdu : on le rouvre */ }
+  nemetonWin = window.open(url, "nemeton");
+  if (!nemetonWin) {   // pop-up bloquée : le serveur ouvre un onglet, et on explique comment l'éviter
+    send({ type: "open_fallback", url });
+    addCard("Fenêtres pop-up", "Autorise les fenêtres pop-up pour cette page (icône à droite de la barre d'adresse) : Néméton s'ouvrira alors toujours dans le même onglet.", "warning");
+  }
+}
+
 /* ---------------------------------------------------------- bascule automatique sur un casque branché */
 const MIC_OPTS = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 };
 const VIRTUELS = new Set(["default", "communications", ""]);   // alias du système, pas des appareils
@@ -816,6 +836,9 @@ function handleEvent(ev) {
       break;
     case "card":
       addCard(ev.title || "Info", ev.content || "", ev.kind || "info");
+      break;
+    case "open_nemeton":
+      openNemeton(ev.url);
       break;
     case "report":
       try { showReport(ev.report || {}); } catch (err) { addCard("Rapport", String(err), "warning"); }

@@ -226,7 +226,11 @@ Pour ouvrir l'application Néméton sur un projet ("ouvre la synthèse de
 Dabo"), délègue d'abord dans l'espace nemeton (« donne l'URL url_app du projet
 Dabo, onglet synthesis »), puis appelle open_nemeton avec l'URL reçue. Onglets :
 synthesis, selection, action_plan, terrain, monitoring, regeneration,
-famille_* (ex. famille_risque). Sans projet précis, open_nemeton sans URL."""
+famille_* (ex. famille_risque). Sans projet précis, open_nemeton sans URL.
+Pour changer d'onglet sur le projet déjà ouvert ("passe sur l'onglet
+sélection"), rappelle directement open_nemeton avec la même URL et le nouveau
+tab, sans redéléguer : l'application s'affiche dans le même onglet du
+navigateur."""
 
 TOOLS = [{
     "name": "delegate_to_claude",
@@ -753,15 +757,22 @@ def _nemeton_repond(timeout: float = 2.0) -> bool:
         return False
 
 
-def open_nemeton(url: str | None = None, monitor: str | None = None, timeout: float = 30.0) -> dict:
-    """Ouvre l'app Néméton (bloquant : à appeler dans un thread).
+def nemeton_url_ok(url: str) -> bool:
+    """L'URL vient d'une tâche Claude Code qui a pu lire du contenu externe :
+    on n'accepte que l'app locale, jamais un autre hôte."""
+    parts = urlsplit(url)
+    return parts.scheme == "http" and parts.netloc == urlsplit(NEMETON_URL).netloc
 
-    L'URL vient d'une tâche Claude Code qui a pu lire du contenu externe :
-    on n'accepte que l'app locale, jamais un autre hôte.
+
+def open_nemeton(url: str | None = None, monitor: str | None = None, timeout: float = 30.0,
+                 navigateur: bool = True) -> dict:
+    """Démarre l'app Néméton si besoin puis l'ouvre (bloquant : à appeler dans un thread).
+
+    navigateur=False : ne fait que démarrer l'app ; l'ouverture est laissée à la
+    page de VICTOR, qui réutilise le même onglet d'un appel à l'autre.
     """
     url = (url or "").strip() or NEMETON_URL
-    parts = urlsplit(url)
-    if parts.scheme != "http" or parts.netloc != urlsplit(NEMETON_URL).netloc:
+    if not nemeton_url_ok(url):
         return {"ok": False, "error": f"URL refusée : seule {NEMETON_URL}/… est autorisée."}
     started = False
     if not _nemeton_repond():
@@ -778,6 +789,8 @@ def open_nemeton(url: str | None = None, monitor: str | None = None, timeout: fl
             if time.monotonic() > fin:
                 return {"ok": False, "error": f"Néméton ne répond toujours pas après {timeout:.0f} s."}
             time.sleep(1)
+    if not navigateur:
+        return {"ok": True, "url": url, "service_started": started}
     res = open_target(url=url, monitor=monitor)
     res["service_started"] = started
     return res
@@ -1339,6 +1352,9 @@ class Session:
                     self.emit({"type": "state", "state": "listening"})
         elif t == "interrupt":
             await self.interrupt()
+        elif t == "open_fallback" and NEMETON and nemeton_url_ok(m.get("url") or ""):
+            # Fenêtres pop-up bloquées dans la page : on ouvre côté serveur (nouvel onglet).
+            await asyncio.to_thread(open_target, url=m["url"])
         elif t == "cancel_task":
             res = cancel_task(m.get("id") or "latest")
             if res.get("cancelled"):
@@ -1549,7 +1565,14 @@ class Session:
             if name == "open_nemeton":
                 self.emit({"type": "card", "title": "Lancement", "kind": "info",
                            "content": f"Ouverture de **Néméton** ({args.get('url') or NEMETON_URL})"})
-                return await asyncio.to_thread(open_nemeton, args.get("url"), args.get("monitor"))
+                # Avec un écran précis, le serveur ouvre et place la fenêtre ; sinon la
+                # page ouvre l'app dans un onglet nommé, réutilisé d'un appel à l'autre.
+                monitor = args.get("monitor")
+                res = await asyncio.to_thread(open_nemeton, args.get("url"), monitor,
+                                              navigateur=bool(monitor))
+                if res.get("ok") and not monitor:
+                    self.emit({"type": "open_nemeton", "url": res["url"]})
+                return res
             if name == "cancel_task":
                 res = cancel_task(args.get("task_id") or "latest")
                 if res.get("cancelled"):
