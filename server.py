@@ -1354,6 +1354,7 @@ class Session:
             await self.interrupt()
         elif t == "open_fallback" and NEMETON and nemeton_url_ok(m.get("url") or ""):
             # Fenêtres pop-up bloquées dans la page : on ouvre côté serveur (nouvel onglet).
+            print(f"[page] pop-up bloquée, ouverture par le serveur : {m['url']}", flush=True)
             await asyncio.to_thread(open_target, url=m["url"])
         elif t == "cancel_task":
             res = cancel_task(m.get("id") or "latest")
@@ -1538,6 +1539,8 @@ class Session:
 
     # -- outils
     async def run_tool(self, name: str, args: dict) -> dict:
+        if name in ("open_url", "open_nemeton"):
+            print(f"[outil] {name} {json.dumps(args, ensure_ascii=False)}", flush=True)
         try:
             if name == "delegate_to_claude":
                 task = start_task(args.get("title") or "Tâche", args.get("prompt") or "",
@@ -1551,6 +1554,12 @@ class Session:
                                       + (f" → écran **{args['monitor']}**" if args.get("monitor") else "")})
                 return await asyncio.to_thread(open_target, name=args.get("name", ""),
                                                monitor=args.get("monitor"))
+            if name == "open_url" and NEMETON:
+                # Une URL de l'app Néméton passe par open_nemeton, qui réutilise l'onglet
+                # déjà ouvert au lieu d'en ouvrir un nouveau à chaque fois.
+                u = (args.get("url") or "").strip().replace("://localhost:", "://127.0.0.1:", 1)
+                if nemeton_url_ok(u):
+                    return await self.run_tool("open_nemeton", {**args, "url": u})
             if name == "open_url":
                 self.emit({"type": "card", "title": "Lancement", "kind": "info",
                            "content": f"Ouverture de **{args.get('url', '')}**"})
@@ -1572,6 +1581,7 @@ class Session:
                                               navigateur=bool(monitor))
                 if res.get("ok") and not monitor:
                     self.emit({"type": "open_nemeton", "url": res["url"]})
+                    res["note"] = "affiché dans l'onglet Néméton déjà ouvert s'il existe"
                 return res
             if name == "cancel_task":
                 res = cancel_task(args.get("task_id") or "latest")
