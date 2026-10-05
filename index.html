@@ -673,6 +673,7 @@ orb.addEventListener("click", start);
 let nemetonWin = null;
 function openNemeton(url) {
   if (!/^http:\/\/127\.0\.0\.1:3838(\/|\?|$)/.test(url || "")) return;
+  attendreNemeton(url);
   try {
     if (nemetonWin && !nemetonWin.closed) {
       nemetonWin.location.href = url;
@@ -686,6 +687,33 @@ function openNemeton(url) {
     addCard("Fenêtres pop-up", "Autorise les fenêtres pop-up pour cette page (icône à droite de la barre d'adresse) : Néméton s'ouvrira alors toujours dans le même onglet.", "warning");
   }
 }
+
+// Fin de chargement : l'onglet Néméton (ouvert par cette page, donc avec
+// window.opener) envoie {source: "nemetonshiny", type: "ready"|"invalid",
+// project, tab} par postMessage quand l'onglet demandé est affiché et que Shiny
+// n'est plus occupé. On ne relaie que la réponse à une ouverture demandée ici.
+const NEMETON_ORIGIN = "http://127.0.0.1:3838";
+let nemetonAttente = null;
+function nemetonSignale() { try { return localStorage.getItem("victor-nemeton-signal") === "1"; } catch (_) { return false; } }
+function attendreNemeton(url) {
+  if (nemetonAttente) clearTimeout(nemetonAttente.timer);
+  // Une app qui n'a jamais envoyé de signal ne le fera pas : on ne fait pas
+  // patienter deux minutes pour rien.
+  const delai = nemetonSignale() ? 120000 : 45000;
+  nemetonAttente = { url, timer: setTimeout(() => {
+    nemetonAttente = null;
+    send({ type: "nemeton_status", status: nemetonSignale() ? "timeout" : "no_signal" });
+  }, delai) };
+}
+window.addEventListener("message", (e) => {
+  if (e.origin !== NEMETON_ORIGIN || !e.data || e.data.source !== "nemetonshiny") return;
+  try { localStorage.setItem("victor-nemeton-signal", "1"); } catch (_) {}
+  if (!nemetonAttente || !["ready", "invalid"].includes(e.data.type)) return;
+  clearTimeout(nemetonAttente.timer);
+  nemetonAttente = null;
+  send({ type: "nemeton_status", status: e.data.type,
+         project: String(e.data.project || ""), tab: String(e.data.tab || "") });
+});
 
 /* ---------------------------------------------------------- bascule automatique sur un casque branché */
 const MIC_OPTS = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 };

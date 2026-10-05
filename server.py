@@ -230,7 +230,11 @@ famille_* (ex. famille_risque). Sans projet précis, open_nemeton sans URL.
 Pour changer d'onglet sur le projet déjà ouvert ("passe sur l'onglet
 sélection"), rappelle directement open_nemeton avec la même URL et le nouveau
 tab, sans redéléguer : l'application s'affiche dans le même onglet du
-navigateur."""
+navigateur.
+Après open_nemeton, ne dis JAMAIS que c'est ouvert ou prêt : dis que
+l'application se charge et qu'il faut patienter un instant. Un message
+[SYSTÈME] « Néméton » t'apprendra quand la page est entièrement affichée :
+annonce alors, en une phrase, que l'utilisateur peut reprendre la main."""
 
 TOOLS = [{
     "name": "delegate_to_claude",
@@ -1352,6 +1356,8 @@ class Session:
                     self.emit({"type": "state", "state": "listening"})
         elif t == "interrupt":
             await self.interrupt()
+        elif t == "nemeton_status" and NEMETON:
+            self.nemeton_status(m)
         elif t == "open_fallback" and NEMETON and nemeton_url_ok(m.get("url") or ""):
             # Fenêtres pop-up bloquées dans la page : on ouvre côté serveur (nouvel onglet).
             print(f"[page] pop-up bloquée, ouverture par le serveur : {m['url']}", flush=True)
@@ -1581,7 +1587,8 @@ class Session:
                                               navigateur=bool(monitor))
                 if res.get("ok") and not monitor:
                     self.emit({"type": "open_nemeton", "url": res["url"]})
-                    res["note"] = "affiché dans l'onglet Néméton déjà ouvert s'il existe"
+                    res["note"] = ("affiché dans l'onglet Néméton déjà ouvert s'il existe ; "
+                                   "la page se charge : un message [SYSTÈME] dira quand elle est prête")
                 return res
             if name == "cancel_task":
                 res = cancel_task(args.get("task_id") or "latest")
@@ -1614,14 +1621,47 @@ class Session:
         if task["status"] == "cancelled":
             return
         summary = (task["output"] or "").strip()[:4000]
-        self.inbox.append(
+        self.notify(
             f"[SYSTÈME] Résultat de la tâche « {task['title']} » ({task['status']}) :\n{summary}\n"
             "Résume oralement en une ou deux phrases. S'il s'agit d'une analyse de "
             "données (chiffres, stats, comparatifs), affiche un tableau de bord avec "
             "display_report ; pour un résultat ponctuel, utilise display_card.")
-        # Ne pas couper la parole : on attend que VICTOR et l'utilisateur se taisent.
+
+    def notify(self, message: str):
+        self.inbox.append(message)
+        # Ne pas couper la parole : on attend que VICTOR et l'utilisateur se taisent
+        # (sinon respond() reprend l'inbox à la fin du tour en cours).
         if not (self.turn and not self.turn.done()) and not self.words:
             self.start_turn()
+
+    def nemeton_status(self, m: dict):
+        """État de chargement de l'onglet Néméton, relayé par la page.
+
+        Les champs viennent de l'app (via postMessage) : ce sont des données,
+        réduites à un identifiant court, jamais des consignes.
+        """
+        def court(v):
+            v = v if isinstance(v, str) else ""
+            return re.sub(r"[^\w.-]", "", v)[:80]
+        status, projet, onglet = court(m.get("status")), court(m.get("project")), court(m.get("tab"))
+        quoi = ", ".join(x for x in (f"projet {projet}" if projet else "",
+                                     f"onglet {onglet}" if onglet else "") if x)
+        if status == "ready":
+            msg = (f"[SYSTÈME] Néméton : la page est entièrement affichée{' (' + quoi + ')' if quoi else ''}. "
+                   "Annonce en une phrase que l'utilisateur peut reprendre la main.")
+        elif status == "invalid":
+            msg = ("[SYSTÈME] Néméton : l'application a refusé le lien (projet ou onglet inconnu). "
+                   "Dis-le en une phrase et propose de vérifier le nom du projet.")
+        elif status == "timeout":
+            msg = ("[SYSTÈME] Néméton : la page n'a pas signalé qu'elle était prête après deux minutes. "
+                   "Dis en une phrase que le chargement est long et qu'il peut vérifier l'écran.")
+        elif status == "no_signal":
+            msg = ("[SYSTÈME] Néméton : cette version de l'application ne signale pas encore la fin "
+                   "du chargement. Dis en une phrase que la page devrait maintenant être affichée.")
+        else:
+            return
+        print(f"[page] nemeton {status} {quoi}", flush=True)
+        self.notify(msg)
 
 
 @app.websocket("/ws")
