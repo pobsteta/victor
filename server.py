@@ -199,6 +199,29 @@ déduis-le du sujet de la demande. Dans le doute, demande-le en une phrase
 courte avant de déléguer. Sans précision possible, l'espace par défaut est
 « {ESPACE_DEFAUT} »."""
 
+NEMETON = "nemeton" in ESPACES
+NEMETON_URL = "http://127.0.0.1:3838"
+if NEMETON:
+    INSTRUCTIONS += """
+
+Pour Néméton (projets forestiers, diagnostics, indicateurs, familles,
+rapports), délègue dans l'espace nemeton. Un calcul d'indicateurs dure de
+quelques minutes à plus d'une heure : demande à Claude Code de le LANCER EN
+TÂCHE DE FOND (outil lancer_calcul) et de rendre la main aussitôt ; dis à
+l'utilisateur qu'il peut demander « où en est le calcul » plus tard
+(outil etat_calcul). N'attends jamais la fin d'un calcul. Pour un résultat de
+diagnostic, demande à Claude Code de terminer par le bloc JSON du rapport
+(title, kpis, chart, markdown), puis appelle display_report avec. Si
+Claude Code répond que plusieurs projets correspondent, lis les candidats et
+demande lequel. À voix haute, donne seulement le score global et la famille
+la plus faible : le reste va à l'écran.
+
+Pour ouvrir l'application Néméton sur un projet ("ouvre la synthèse de
+Dabo"), délègue d'abord dans l'espace nemeton (« donne l'URL url_app du projet
+Dabo, onglet synthesis »), puis appelle open_nemeton avec l'URL reçue. Onglets :
+synthesis, selection, action_plan, terrain, monitoring, regeneration,
+famille_* (ex. famille_risque). Sans projet précis, open_nemeton sans URL."""
+
 TOOLS = [{
     "name": "delegate_to_claude",
     "description": ("Delegate a real task to a Claude Code session running on "
@@ -344,6 +367,18 @@ if len(ESPACES) > 1:
         "type": "string", "enum": list(ESPACES),
         "description": f"Workspace whose project to open. Default: {ESPACE_DEFAUT}",
     }
+if NEMETON:
+    TOOLS.append({
+        "name": "open_nemeton",
+        "description": ("Open the Nemeton web application, optionally on a project URL "
+                        "returned by Claude Code (url_app tool). Starts the app service if needed."),
+        "input_schema": {"type": "object", "properties": {
+            "url": {"type": "string",
+                    "description": f"{NEMETON_URL}/?project=…&tab=… (optional)"},
+            "monitor": {"type": "string",
+                        "description": "Target screen: 'left', 'right', 'top', 'bottom', 'primary' or a number. Optional."},
+        }},
+    })
 TOOLS[-1]["cache_control"] = {"type": "ephemeral"}
 SYSTEM = [{"type": "text", "text": INSTRUCTIONS, "cache_control": {"type": "ephemeral"}}]
 
@@ -696,6 +731,50 @@ def open_target(name: str = "", url: str | None = None, monitor: str | None = No
         return res
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
+
+
+# ---------------------------------------------------------------- application Néméton (Shiny locale)
+
+def _nemeton_repond(timeout: float = 2.0) -> bool:
+    # Sonde du port, pas de la page : Shiny n'écoute qu'une fois prêt, et la
+    # première page met plusieurs secondes à se construire.
+    import socket
+    parts = urlsplit(NEMETON_URL)
+    try:
+        with socket.create_connection((parts.hostname, parts.port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def open_nemeton(url: str | None = None, monitor: str | None = None, timeout: float = 30.0) -> dict:
+    """Ouvre l'app Néméton (bloquant : à appeler dans un thread).
+
+    L'URL vient d'une tâche Claude Code qui a pu lire du contenu externe :
+    on n'accepte que l'app locale, jamais un autre hôte.
+    """
+    url = (url or "").strip() or NEMETON_URL
+    parts = urlsplit(url)
+    if parts.scheme != "http" or parts.netloc != urlsplit(NEMETON_URL).netloc:
+        return {"ok": False, "error": f"URL refusée : seule {NEMETON_URL}/… est autorisée."}
+    started = False
+    if not _nemeton_repond():
+        if not shutil.which("systemctl"):
+            return {"ok": False, "error": "Néméton ne répond pas et systemctl est absent."}
+        r = subprocess.run(["systemctl", "--user", "start", "nemetonshiny"],
+                           capture_output=True, text=True, timeout=15)
+        if r.returncode != 0:
+            return {"ok": False, "error": "Impossible de démarrer le service nemetonshiny : "
+                                         + (r.stderr.strip() or f"code {r.returncode}")}
+        started = True
+        fin = time.monotonic() + timeout
+        while not _nemeton_repond():
+            if time.monotonic() > fin:
+                return {"ok": False, "error": f"Néméton ne répond toujours pas après {timeout:.0f} s."}
+            time.sleep(1)
+    res = open_target(url=url, monitor=monitor)
+    res["service_started"] = started
+    return res
 
 
 # ---------------------------------------------------------------- RStudio / QGIS sur le projet d'un espace
@@ -1428,6 +1507,10 @@ class Session:
                 self.emit({"type": "card", "title": "Lancement", "kind": "info",
                            "content": f"Ouverture de **{nom}** (espace **{args.get('espace') or ESPACE_DEFAUT}**)"})
                 return await asyncio.to_thread(open_project_app, cle, args.get("espace"))
+            if name == "open_nemeton":
+                self.emit({"type": "card", "title": "Lancement", "kind": "info",
+                           "content": f"Ouverture de **Néméton** ({args.get('url') or NEMETON_URL})"})
+                return await asyncio.to_thread(open_nemeton, args.get("url"), args.get("monitor"))
             if name == "cancel_task":
                 res = cancel_task(args.get("task_id") or "latest")
                 if res.get("cancelled"):

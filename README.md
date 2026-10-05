@@ -241,6 +241,34 @@ l'espace s'affiche sur chaque session, à droite de l'interface.
 partie de la liste). Un espace dont le dossier n'existe pas est ignoré, avec
 un avertissement dans la console au démarrage.
 
+### Néméton
+
+Si un espace s'appelle `nemeton` (celui qui porte le serveur MCP Néméton),
+VICTOR sait piloter les diagnostics forestiers :
+
+- « Où en est le projet Couchey ? » → réponse courte + rapport à l'écran ;
+- « Lance le calcul de Couchey » → le calcul part en tâche de fond (il peut
+  durer plus d'une heure et survit à la tâche Claude Code) ;
+- « Où en est le calcul ? » → progression ;
+- « Ouvre la synthèse de Couchey » → l'application s'ouvre sur l'onglet voulu.
+
+L'outil `open_nemeton` n'ouvre **que** `http://127.0.0.1:3838/…` (toute autre
+adresse est refusée : elle viendrait d'une tâche qui a pu lire une page web).
+Si l'application ne répond pas, il démarre le service `nemetonshiny` :
+
+```ini
+# ~/.config/systemd/user/nemetonshiny.service
+[Service]
+EnvironmentFile=-%h/dev/nemetonshiny/.Renviron
+ExecStart=/usr/bin/Rscript -e 'nemetonshiny::run_app(tour = FALSE, options = list(port = 3838, launch.browser = FALSE))'
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+puis `systemctl --user enable --now nemetonshiny`.
+
 ---
 
 ## 🔧 Personnalisation (fichier `.env`)
