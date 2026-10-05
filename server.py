@@ -1401,6 +1401,29 @@ class Session:
                 h.pop(0)
             self.history = h
 
+    def _sanitize(self):
+        """Garantit que chaque tool_use est suivi de son tool_result.
+
+        Sinon l'API refuse TOUTE la suite de la conversation (erreur 400 à
+        chaque tour) : on complète avec des résultats d'erreur, placés en
+        tête du message utilisateur suivant comme l'exige l'API.
+        """
+        h = self.history
+        for i, msg in enumerate(h):
+            if msg["role"] != "assistant":
+                continue
+            ids = [b["id"] for b in msg["content"] if b.get("type") == "tool_use"]
+            if not ids:
+                continue
+            if i + 1 >= len(h) or h[i + 1]["role"] != "user":
+                h.insert(i + 1, {"role": "user", "content": []})
+            nxt = h[i + 1]["content"]
+            have = {b.get("tool_use_id") for b in nxt if b.get("type") == "tool_result"}
+            results = [b for b in nxt if b.get("type") == "tool_result"]
+            results += [{"type": "tool_result", "tool_use_id": t, "is_error": True,
+                         "content": "Outil non exécuté."} for t in ids if t not in have]
+            h[i + 1]["content"] = results + [b for b in nxt if b.get("type") != "tool_result"]
+
     def _repair(self, spoken: str):
         """Après une interruption, remettre l'historique dans un état valide."""
         last = self.history[-1] if self.history else None
@@ -1441,9 +1464,10 @@ class Session:
         try:
             for _ in range(8):  # garde-fou contre les boucles d'outils
                 self._trim()
+                self._sanitize()
                 spoken = ""
                 async with self.claude.messages.stream(
-                    model=MODEL, max_tokens=1024, system=SYSTEM, tools=TOOLS,
+                    model=MODEL, max_tokens=4096, system=SYSTEM, tools=TOOLS,
                     messages=self.history,
                 ) as stream:
                     async for delta in stream.text_stream:
@@ -1462,7 +1486,16 @@ class Session:
                 self.history.append({"role": "assistant", "content": content})
                 spoken = ""
                 uses = [b for b in content if b["type"] == "tool_use"]
-                if final.stop_reason != "tool_use" or not uses:
+                if uses and final.stop_reason != "tool_use":
+                    # Réponse coupée (max_tokens) au milieu d'un appel d'outil : son
+                    # entrée est incomplète, on ne l'exécute pas et on laisse Claude
+                    # recommencer plus court.
+                    self.history.append({"role": "user", "content": [
+                        {"type": "tool_result", "tool_use_id": u["id"], "is_error": True,
+                         "content": "Réponse tronquée, outil non exécuté : recommence plus court."}
+                        for u in uses]})
+                    continue
+                if not uses:
                     break
                 await tts.flush_now()
                 results = []
