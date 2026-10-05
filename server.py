@@ -78,6 +78,10 @@ GRADIUM_HOST = os.environ.get("GRADIUM_HOST", "eu.api.gradium.ai")
 GRADIUM_SCHEME = os.environ.get("GRADIUM_SCHEME", "wss")  # "ws" seulement pour les tests
 MODEL = os.environ.get("VICTOR_MODEL", "claude-haiku-4-5-20251001")
 VOICE_ID = os.environ.get("VICTOR_VOICE_ID", "iEu63s1rhn_kegTr")  # Gaspard (FR, masculin)
+# Voix féminines (Apolline, Noémie, Solène) : l'assistant devient VICTORINE.
+VOIX_FEMININES = {"6oIkS98REoVZ1dEw", "FXxJ9mANRq6BCTX5", "YhIHaAfQ0cQPDV9R"}
+FEMININ = VOICE_ID in VOIX_FEMININES
+NOM = "VICTORINE" if FEMININ else "VICTOR"
 LANGUAGE = os.environ.get("VICTOR_LANGUAGE", "fr")
 TITLE = os.environ.get("VICTOR_TITRE", "monsieur")
 # Genre de l'utilisateur, pour les accords ("prête", "ravie"). Par défaut, déduit du titre.
@@ -136,12 +140,14 @@ ESPACES, ESPACE_DEFAUT = parse_espaces(os.environ.get("VICTOR_ESPACES", ""),
 
 LANG_NAMES = {"fr": "français", "en": "anglais", "es": "espagnol", "de": "allemand", "pt": "portugais"}
 
-INSTRUCTIONS = f"""Tu es VICTOR, l'assistant vocal personnel de {TITLE}, dans l'esprit
-d'un majordome numérique : courtoisie raffinée, flegme impeccable, pointe
+INSTRUCTIONS = f"""Tu es {NOM}, {"l'assistante vocale personnelle" if FEMININ else "l'assistant vocal personnel"} de {TITLE}, dans l'esprit
+{"d'une gouvernante numérique" if FEMININ else "d'un majordome numérique"} : courtoisie raffinée, flegme impeccable, pointe
 d'esprit pince-sans-rire ("Très bien, {TITLE}.", "Si {TITLE} veut bien patienter
 un instant."). Tu t'adresses à l'utilisateur en l'appelant "{TITLE}".
 {"C'est une femme : accorde toujours au féminin ce qui la concerne (prête, ravie, installée, seule)."
  if GENRE == "f" else "C'est un homme : accorde au masculin ce qui le concerne."}
+{"Tu as une voix de femme : accorde toujours au féminin ce qui te concerne (prête, ravie, désolée)."
+ if FEMININ else "Tu as une voix d'homme : accorde au masculin ce qui te concerne."}
 Tu parles en {LANG_NAMES.get(LANGUAGE, LANGUAGE)}.
 
 TOUT CE QUE TU ÉCRIS EST LU À VOIX HAUTE par une synthèse vocale :
@@ -308,7 +314,7 @@ TOOLS = [{
     },
 }, {
     "name": "display_card",
-    "description": ("Show a visual card on the VICTOR screen: results, "
+    "description": (f"Show a visual card on the {NOM} screen: results, "
                     "numbers, lists, code, comparisons. Markdown is allowed "
                     "here (it is displayed, not spoken). Keep the spoken reply short."),
     "input_schema": {
@@ -1568,7 +1574,7 @@ GRADIUM_VOICES = {
     "FXxJ9mANRq6BCTX5": "Noémie", "YhIHaAfQ0cQPDV9R": "Solène",
 }
 SETTINGS = [
-    {"key": "VICTOR_TITRE", "group": "Général", "label": "Comment VICTOR t'appelle", "type": "text"},
+    {"key": "VICTOR_TITRE", "group": "Général", "label": f"Comment {NOM} t'appelle", "type": "text"},
     {"key": "VICTOR_GENRE", "group": "Général", "label": "Accords", "type": "select",
      "options": {"m": "Masculin", "f": "Féminin"}, "help": "Pour que VICTOR dise « prête » ou « prêt »"},
     {"key": "VICTOR_LANGUAGE", "group": "Général", "label": "Langue", "type": "select",
@@ -1576,7 +1582,7 @@ SETTINGS = [
     {"key": "VICTOR_MODEL", "group": "Général", "label": "Modèle Claude du cerveau", "type": "text",
      "suggest": ["claude-haiku-4-5-20251001", "claude-sonnet-5-5", "claude-opus-5-5"]},
     {"key": "VICTOR_VOICE_ID", "group": "Gradium", "label": "Voix", "type": "select",
-     "options": GRADIUM_VOICES},
+     "options": GRADIUM_VOICES, "help": "Voix féminine (Apolline, Noémie, Solène) : l'assistante s'appelle VICTORINE"},
     {"key": "GRADIUM_HOST", "group": "Gradium", "label": "Serveur", "type": "select",
      "options": {"eu.api.gradium.ai": "Europe", "us.api.gradium.ai": "États-Unis",
                  "api.gradium.ai": "Global"}},
@@ -1588,9 +1594,9 @@ SETTINGS = [
      "help": "Plus petit = réponse plus rapide, mais risque de te couper"},
     {"key": "VICTOR_TURN_THRESHOLD", "group": "Réactivité", "label": "Seuil de silence",
      "type": "range", "min": 0.05, "max": 0.95, "step": 0.05,
-     "help": "Probabilité de silence à partir de laquelle VICTOR répond"},
-    {"key": "VICTOR_BARGE_IN", "group": "Réactivité", "label": "Interrompre VICTOR en parlant",
-     "type": "toggle", "help": "Désactive si VICTOR s'interrompt tout seul (haut-parleurs sans casque)"},
+     "help": f"Probabilité de silence à partir de laquelle {NOM} répond"},
+    {"key": "VICTOR_BARGE_IN", "group": "Réactivité", "label": f"Interrompre {NOM} en parlant",
+     "type": "toggle", "help": f"Désactive si {NOM} s'interrompt tout seul (haut-parleurs sans casque)"},
     {"key": "VICTOR_MIC_THRESHOLD", "group": "Économie de crédits", "label": "Seuil du micro",
      "type": "range", "min": 0, "max": 0.1, "step": 0.005,
      "help": "0 = transcription permanente (consomme en continu)"},
@@ -1674,7 +1680,7 @@ def restart_server():
 
 @app.get("/api/settings")
 def api_get_settings():
-    return {"schema": SETTINGS, "values": current_settings(),
+    return {"schema": SETTINGS, "values": current_settings(), "nom": NOM,
             "busy": sum(t.get("status") == "running" for t in TASKS.values())}
 
 
@@ -1712,5 +1718,5 @@ if __name__ == "__main__":
                               ("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY)) if not v]
     if missing:
         print(f"\n  ⚠  {', '.join(missing)} manquant : copie .env.example vers .env et remplis-le.")
-    print(f"\n  VICTOR Local -> http://127.0.0.1:{PORT}\n")
+    print(f"\n  {NOM} Local -> http://127.0.0.1:{PORT}\n")
     uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")

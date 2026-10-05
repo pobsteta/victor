@@ -271,7 +271,7 @@
   <div class="corner tl"></div><div class="corner tr"></div>
   <div class="corner bl"></div><div class="corner br"></div>
   <div id="topbar">
-    <span class="sys">◈ V.I.C.T.O.R.</span>
+    <span class="sys" id="nom">◈ V.I.C.T.O.R.</span>
     <span id="fontctl" role="group" aria-label="Affichage"><button type="button" id="fullscreen" title="Plein écran" aria-label="Passer en plein écran" aria-pressed="false">⛶</button><button type="button" id="fs-down" title="Réduire le texte" aria-label="Réduire la taille du texte">A−</button><span id="fs-val" aria-live="polite">100 %</span><button type="button" id="fs-up" title="Agrandir le texte" aria-label="Agrandir la taille du texte">A+</button><button type="button" id="gear" title="Réglages" aria-label="Réglages" aria-expanded="false" aria-controls="settings">⚙</button></span>
     <span id="clock">--:--:--</span>
   </div>
@@ -637,7 +637,7 @@ async function start() {
       workletNode.port.onmessage = (e) => { if (ws && ws.readyState === 1) ws.send(e.data); };
     } catch (micErr) {
       micStream = null;
-      addCard("Micro indisponible", `Le micro n'a pas pu être ouvert (${micErr.message}). Tu peux écrire à VICTOR dans le champ sous l'orbe.`, "warning");
+      addCard("Micro indisponible", `Le micro n'a pas pu être ouvert (${micErr.message}). Tu peux écrire à ${NOM} dans le champ sous l'orbe.`, "warning");
     }
 
     const sock = new WebSocket(`ws://${location.host}/ws`);
@@ -698,15 +698,31 @@ function clearAudio() {
   sources = []; playHead = 0; clearTimeout(idleTimer);
 }
 
+/* ---------------------------------------------------------- nom de l'assistant (VICTOR ou VICTORINE, selon la voix) */
+let NOM = "VICTOR";
+function setNom(nom) {
+  if (!nom) return;
+  NOM = nom;
+  const pointe = nom.split("").join(".") + ".";
+  document.getElementById("nom").textContent = "◈ " + pointe;
+  document.title = pointe;
+  const ask = document.querySelector("#ask input");
+  ask.placeholder = `… ou écris à ${nom}, puis Entrée`;
+  ask.setAttribute("aria-label", `Écrire à ${nom}`);
+  STATES.speaking = `<b>${nom} parle</b> · parlez pour l'interrompre`;
+  if (orbMode === "speaking") statusEl.innerHTML = STATES.speaking;
+}
+
 /* ---------------------------------------------------------- événements du serveur */
 const STATES = {
   listening: `<b>à l'écoute</b> · à votre service, monsieur`,  // titre remplacé par /api/settings
   thinking: `<b>réflexion…</b>`,
-  speaking: `<b>VICTOR parle</b> · parlez pour l'interrompre`,
+  speaking: `<b>VICTOR parle</b> · parlez pour l'interrompre`,  // nom remplacé par /api/settings
 };
 fetch("/api/settings").then(r => r.json()).then(d => {
   const titre = (d.values && d.values.VICTOR_TITRE) || "monsieur";
   STATES.listening = `<b>à l'écoute</b> · à votre service, ${esc(titre)}`;
+  setNom(d.nom);
   if (orbMode === "listening") statusEl.innerHTML = STATES.listening;
 }).catch(() => {});
 
