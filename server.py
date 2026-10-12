@@ -222,15 +222,31 @@ Claude Code répond que plusieurs projets correspondent, lis les candidats et
 demande lequel. À voix haute, donne seulement le score global et la famille
 la plus faible : le reste va à l'écran.
 
-Pour ouvrir l'application Néméton sur un projet ("ouvre la synthèse de
-Dabo"), délègue d'abord dans l'espace nemeton (« donne l'URL url_app du projet
-Dabo, onglet synthesis »), puis appelle open_nemeton avec l'URL reçue. Onglets :
-synthesis, selection, action_plan, terrain, monitoring, regeneration,
-famille_* (ex. famille_risque). Sans projet précis, open_nemeton sans URL.
-Pour changer d'onglet sur le projet déjà ouvert ("passe sur l'onglet
-sélection"), rappelle directement open_nemeton avec la même URL et le nouveau
-tab, sans redéléguer : l'application s'affiche dans le même onglet du
-navigateur.
+Pour MONTRER un projet Néméton, préfère les vues publiées sur claude.ai :
+- « ouvre / montre l'Atlas, la carte, les résultats, la synthèse de X » ->
+  vue atlas ;
+- « la sélection de parcelles de <commune> » -> vue selection ;
+- « le calcul de X » -> vue calcul ; « le plan d'actions de X » -> vue plan.
+Délègue dans l'espace nemeton (« ouvre la vue Atlas du projet X, et termine
+par le bloc vue »). Le résultat se termine par un bloc JSON
+{"vue": {"type": …, "projet": …, "url": "https://claude.ai/artifact/…"}} :
+appelle alors open_url avec cette url, puis dis simplement « l'Atlas de X
+s'ouvre dans le navigateur ». Ne lis JAMAIS une URL à voix haute. Sans bloc
+vue, dis en une phrase que la vue n'a pas pu être publiée et propose d'ouvrir
+l'application à la place.
+
+N'ouvre l'application Néméton (open_nemeton) que si l'utilisateur dit
+« l'application », « l'appli » ou « nemetonshiny », ou nomme un onglet que
+seule l'application possède (terrain, monitoring, regeneration, ou une
+famille_* à modifier). Délègue alors d'abord dans l'espace nemeton (« donne
+l'URL url_app du projet Dabo, onglet synthesis »), puis appelle open_nemeton
+avec l'URL reçue. Onglets : synthesis, selection, action_plan, terrain,
+monitoring, regeneration, famille_* (ex. famille_risque). Sans projet précis,
+open_nemeton sans URL.
+Pour changer d'onglet sur le projet déjà ouvert dans l'application ("passe
+sur l'onglet sélection"), rappelle directement open_nemeton avec la même URL
+et le nouveau tab, sans redéléguer : l'application s'affiche dans le même
+onglet du navigateur.
 Après open_nemeton, ne dis JAMAIS que c'est ouvert ou prêt : dis que
 l'application se charge et qu'il faut patienter un instant. Un message
 [SYSTÈME] « Néméton » t'apprendra quand la page est entièrement affichée :
@@ -385,7 +401,9 @@ if NEMETON:
     TOOLS.append({
         "name": "open_nemeton",
         "description": ("Open the Nemeton web application, optionally on a project URL "
-                        "returned by Claude Code (url_app tool). Starts the app service if needed."),
+                        "returned by Claude Code (url_app tool). Starts the app service if needed. "
+                        "Only when the user explicitly asks for the application; to show a "
+                        "project, open its claude.ai view with open_url instead."),
         "input_schema": {"type": "object", "properties": {
             "url": {"type": "string",
                     "description": f"{NEMETON_URL}/?project=…&tab=… (optional)"},
@@ -766,6 +784,32 @@ def nemeton_url_ok(url: str) -> bool:
     on n'accepte que l'app locale, jamais un autre hôte."""
     parts = urlsplit(url)
     return parts.scheme == "http" and parts.netloc == urlsplit(NEMETON_URL).netloc
+
+
+VUE_TYPES = {"atlas": "l'Atlas", "selection": "la Sélection", "calcul": "le Calcul",
+             "plan": "le Plan d'actions"}
+
+
+def vue_url_ok(url: str) -> bool:
+    """URL d'une vue artéfact Néméton publiée sur claude.ai."""
+    parts = urlsplit(url)
+    return parts.scheme == "https" and parts.netloc == "claude.ai" and parts.path.startswith("/artifact/")
+
+
+def extraire_vue(texte: str) -> dict | None:
+    """Dernier bloc {"vue": {...}} valide d'un résultat de tâche, sinon None."""
+    dec = json.JSONDecoder()
+    trouve = None
+    for m in re.finditer(r'\{\s*"vue"\s*:', texte or ""):
+        try:
+            obj, _ = dec.raw_decode(texte, m.start())
+        except ValueError:
+            continue
+        vue = obj.get("vue") if isinstance(obj, dict) else None
+        if isinstance(vue, dict) and isinstance(vue.get("url"), str) and vue_url_ok(vue["url"]):
+            trouve = {"type": str(vue.get("type") or ""), "projet": str(vue.get("projet") or ""),
+                      "url": vue["url"]}
+    return trouve
 
 
 def open_nemeton(url: str | None = None, monitor: str | None = None, timeout: float = 30.0,
@@ -1621,11 +1665,19 @@ class Session:
         if task["status"] == "cancelled":
             return
         summary = (task["output"] or "").strip()[:4000]
+        vue = extraire_vue(task["output"] or "") if task["espace"] == "nemeton" else None
+        if vue:
+            nom = VUE_TYPES.get(vue["type"], "la vue")
+            consigne = (f"Bloc vue détecté ({vue['type'] or 'vue'}, projet {vue['projet'] or '?'}) : "
+                        f"appelle open_url avec url={vue['url']} puis dis en une phrase que {nom} "
+                        "s'ouvre dans le navigateur. Ne lis jamais l'URL à voix haute.")
+        else:
+            consigne = ("Résume oralement en une ou deux phrases. S'il s'agit d'une analyse de "
+                        "données (chiffres, stats, comparatifs), affiche un tableau de bord avec "
+                        "display_report ; pour un résultat ponctuel, utilise display_card.")
         self.notify(
             f"[SYSTÈME] Résultat de la tâche « {task['title']} » ({task['status']}) :\n{summary}\n"
-            "Résume oralement en une ou deux phrases. S'il s'agit d'une analyse de "
-            "données (chiffres, stats, comparatifs), affiche un tableau de bord avec "
-            "display_report ; pour un résultat ponctuel, utilise display_card.")
+            + consigne)
 
     def notify(self, message: str):
         self.inbox.append(message)

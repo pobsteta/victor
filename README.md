@@ -247,10 +247,17 @@ Si un espace s'appelle `nemeton` (celui qui porte le serveur MCP Néméton),
 VICTOR sait piloter les diagnostics forestiers :
 
 - « Où en est le projet Couchey ? » → réponse courte + rapport à l'écran ;
+- « Ouvre l'Atlas de Couchey » → la **vue artéfact** publiée sur claude.ai
+  s'ouvre dans le navigateur (de même pour la sélection de parcelles d'une
+  commune, le calcul et le plan d'actions). La vue doit avoir été publiée une
+  fois depuis une session interactive ; sinon VICTOR le dit et propose
+  l'application ;
 - « Lance le calcul de Couchey » → le calcul part en tâche de fond (il peut
   durer plus d'une heure et survit à la tâche Claude Code) ;
 - « Où en est le calcul ? » → progression ;
-- « Ouvre la synthèse de Couchey » → l'application s'ouvre sur l'onglet voulu.
+- « Ouvre l'application Néméton sur Couchey » → l'application s'ouvre sur
+  l'onglet voulu (seulement si tu dis « l'application », « l'appli », ou
+  nommes un onglet propre à l'app : terrain, monitoring, régénération…).
 
 L'outil `open_nemeton` n'ouvre **que** `http://127.0.0.1:3838/…` (toute autre
 adresse est refusée : elle viendrait d'une tâche qui a pu lire une page web).
