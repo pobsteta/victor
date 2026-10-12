@@ -26,6 +26,7 @@ Routes :
 import asyncio
 import base64
 import collections
+import contextlib
 import json
 import os
 import re
@@ -415,13 +416,15 @@ if NEMETON:
 TOOLS[-1]["cache_control"] = {"type": "ephemeral"}
 SYSTEM = [{"type": "text", "text": INSTRUCTIONS, "cache_control": {"type": "ephemeral"}}]
 
-app = FastAPI(title="VICTOR Local")
+@contextlib.asynccontextmanager
+async def _cycle(app):
+    calculs = asyncio.create_task(surveiller_calculs()) if NEMETON else None
+    yield
+    if calculs:
+        calculs.cancel()
 
 
-@app.on_event("startup")
-async def _demarrage():
-    if NEMETON:
-        app.state.calculs = asyncio.create_task(surveiller_calculs())
+app = FastAPI(title="VICTOR Local", lifespan=_cycle)
 
 
 # ---------------------------------------------------------------- local-only guard
