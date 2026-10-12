@@ -214,8 +214,9 @@ Pour Néméton (projets forestiers, diagnostics, indicateurs, familles,
 rapports), délègue dans l'espace nemeton. Un calcul d'indicateurs dure de
 quelques minutes à plus d'une heure : demande à Claude Code de le LANCER EN
 TÂCHE DE FOND (outil lancer_calcul) et de rendre la main aussitôt ; dis à
-l'utilisateur qu'il peut demander « où en est le calcul » plus tard
-(outil etat_calcul). N'attends jamais la fin d'un calcul. Pour un résultat de
+l'utilisateur que tu le préviendras à la fin, et qu'il peut demander « où en
+est le calcul » d'ici là (outil etat_calcul). N'attends jamais la fin d'un
+calcul : un message [SYSTÈME] « Calcul Néméton » te l'apprendra. Pour un résultat de
 diagnostic, demande à Claude Code de terminer par le bloc JSON du rapport
 (title, kpis, chart, markdown), puis appelle display_report avec. Si
 Claude Code répond que plusieurs projets correspondent, lis les candidats et
@@ -415,6 +416,12 @@ TOOLS[-1]["cache_control"] = {"type": "ephemeral"}
 SYSTEM = [{"type": "text", "text": INSTRUCTIONS, "cache_control": {"type": "ephemeral"}}]
 
 app = FastAPI(title="VICTOR Local")
+
+
+@app.on_event("startup")
+async def _demarrage():
+    if NEMETON:
+        app.state.calculs = asyncio.create_task(surveiller_calculs())
 
 
 # ---------------------------------------------------------------- local-only guard
@@ -810,6 +817,140 @@ def extraire_vue(texte: str) -> dict | None:
             trouve = {"type": str(vue.get("type") or ""), "projet": str(vue.get("projet") or ""),
                       "url": vue["url"]}
     return trouve
+
+
+# ---------------------------------------------------------------- fin des calculs Néméton
+# Les calculs lancés par lancer_calcul survivent à la tâche Claude Code : on
+# suit leur fichier compute_job.json pour annoncer la fin sans qu'on la demande.
+
+NEMETON_PROJETS = Path(os.path.expanduser(
+    os.environ.get("NEMETON_PROJETS", "~/.local/share/nemeton/projects")))
+CALCUL_FINS = {"termine", "echec", "annule"}
+CALCUL_PERIODE = 15
+
+
+def _texte_court(v, n: int = 80) -> str:
+    """Champ venu d'un fichier de projet : donnée affichée, jamais une consigne."""
+    v = v if isinstance(v, str) else ""
+    return re.sub(r"[^\w .,'’()«»/:-]", "", v).strip()[:n]
+
+
+def _lire_json(chemin: Path):
+    try:
+        return json.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _pid_vivant(pid) -> bool:
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _age_sec(stamp) -> float:
+    try:
+        return time.time() - time.mktime(time.strptime(stamp, "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return float("inf")
+
+
+def scan_calculs(racine: Path = NEMETON_PROJETS) -> dict[str, dict]:
+    """projet -> {job_id, statut, fin_a, erreur}, statut corrigé si le processus est mort
+    (même règle que etat_calcul de nemetonshiny)."""
+    etats = {}
+    for f in racine.glob("*/data/compute_job.json"):
+        job = _lire_json(f)
+        if not isinstance(job, dict):
+            continue
+        statut = job.get("statut") or "aucun"
+        erreur = job.get("erreur")
+        if statut in ("lancement", "en_cours") and not (
+                _pid_vivant(job.get("pid")) or (job.get("pid") is None and _age_sec(job.get("lance_a")) < 60)):
+            statut, erreur = "echec", "le processus de calcul s'est arrêté sans terminer"
+        etats[f.parent.parent.name] = {"job_id": job.get("job_id"), "statut": statut,
+                                       "fin_a": job.get("fin_a"), "erreur": erreur}
+    return etats
+
+
+def message_calcul(projet: str, etat: dict, racine: Path = NEMETON_PROJETS) -> str:
+    meta = _lire_json(racine / projet / "metadata.json") or {}
+    nom = _texte_court(meta.get("name")) or projet
+    statut = etat["statut"]
+    if statut == "annule":
+        return (f"[SYSTÈME] Calcul Néméton : le calcul du projet « {nom} » ({projet}) est annulé. "
+                "Dis-le en une phrase.")
+    if statut == "echec":
+        return (f"[SYSTÈME] Calcul Néméton : le calcul du projet « {nom} » ({projet}) a échoué "
+                f"({_texte_court(etat.get('erreur'), 160) or 'erreur inconnue'}). Dis-le en une phrase "
+                "et propose de déléguer la lecture du journal dans l'espace nemeton.")
+    msg = (f"[SYSTÈME] Calcul Néméton : le calcul du projet « {nom} » ({projet}) est terminé. "
+           "Annonce-le en une phrase. ")
+    vues = _lire_json(Path(ESPACES["nemeton"]["path"]) / "data" / "vues.json") if NEMETON else None
+    entree = vues.get(projet) if isinstance(vues, dict) else None
+    fin = str(etat.get("fin_a") or "~")
+    vues_projet = [(VUE_TYPES.get(t, t), str(v.get("maj") or "") >= fin) for t, v in (entree or {}).items()
+                   if isinstance(v, dict) and v.get("url")]
+    anciennes = [n for n, a_jour in vues_projet if not a_jour]
+    a_jour = [n for n, ok in vues_projet if ok]
+    if anciennes:
+        msg += (f"Vues publiées avant ce calcul, qui montrent les anciens résultats : {', '.join(anciennes)}. "
+                "Une tâche ne peut pas les republier : propose d'ouvrir l'application Néméton, "
+                "ou de mettre à jour la vue depuis une session Claude Code interactive.")
+    elif a_jour:
+        msg += f"Vues à jour : {', '.join(a_jour)}. Propose de les ouvrir."
+    else:
+        msg += "Propose d'ouvrir l'application Néméton pour voir les résultats."
+    return msg
+
+
+def calculs_a_annoncer(avant: dict, apres: dict) -> list[str]:
+    """Projets dont le calcul vient de se terminer entre deux relevés."""
+    fins = []
+    for projet, e in apres.items():
+        a = avant.get(projet)
+        if e["statut"] not in CALCUL_FINS:
+            continue
+        if a is None or a["job_id"] != e["job_id"] or a["statut"] not in CALCUL_FINS:
+            fins.append(projet)
+    return fins
+
+
+SESSIONS: list = []                 # pages connectées, la plus récente en dernier
+ANNONCES_EN_ATTENTE: list[str] = []  # fins de calcul survenues sans page ouverte
+
+
+def annoncer(message: str):
+    if SESSIONS:
+        SESSIONS[-1].notify(message)
+    else:
+        ANNONCES_EN_ATTENTE.append(message)
+
+
+async def surveiller_calculs():
+    precedent = None
+    while True:
+        try:
+            etats = await asyncio.to_thread(scan_calculs)
+            if precedent is not None:
+                for projet in calculs_a_annoncer(precedent, etats):
+                    msg = await asyncio.to_thread(message_calcul, projet, etats[projet])
+                    print(f"[néméton] calcul {projet} : {etats[projet]['statut']}", flush=True)
+                    annoncer(msg)
+            precedent = etats
+        except Exception as exc:  # la surveillance ne doit jamais tomber
+            print(f"[néméton] surveillance des calculs : {exc}", flush=True)
+        await asyncio.sleep(CALCUL_PERIODE)
 
 
 def open_nemeton(url: str | None = None, monitor: str | None = None, timeout: float = 30.0,
@@ -1365,6 +1506,9 @@ class Session:
         if missing:
             self.emit({"type": "error", "message": f"{' et '.join(missing)} manquant(e) dans .env"})
         self.emit({"type": "state", "state": "listening"})
+        SESSIONS.append(self)
+        while ANNONCES_EN_ATTENTE:
+            self.notify(ANNONCES_EN_ATTENTE.pop(0))
         try:
             while True:
                 msg = await self.ws.receive()
@@ -1378,6 +1522,8 @@ class Session:
             pass
         finally:
             self.closed = True
+            if self in SESSIONS:
+                SESSIONS.remove(self)
             await self.cancel_turn()
             await self.stt.close()
             for t in list(self.bg):

@@ -254,7 +254,12 @@ VICTOR sait piloter les diagnostics forestiers :
   l'application ;
 - « Lance le calcul de Couchey » → le calcul part en tâche de fond (il peut
   durer plus d'une heure et survit à la tâche Claude Code) ;
-- « Où en est le calcul ? » → progression ;
+- « Où en est le calcul ? » → progression. Sans rien demander, VICTOR
+  annonce la fin (ou l'échec) du calcul : il surveille le fichier
+  `data/compute_job.json` des projets (dossier `NEMETON_PROJETS`, par défaut
+  `~/.local/share/nemeton/projects`). Si aucune page n'est ouverte, l'annonce
+  attend la prochaine connexion. Une vue publiée avant le calcul est signalée
+  comme ancienne : une tâche ne peut pas la republier ;
 - « Ouvre l'application Néméton sur Couchey » → l'application s'ouvre sur
   l'onglet voulu (seulement si tu dis « l'application », « l'appli », ou
   nommes un onglet propre à l'app : terrain, monitoring, régénération…).
@@ -301,6 +306,7 @@ puis `systemctl --user enable --now nemetonshiny`.
 | `VICTOR_ESPACES_DESC` | *(vide)* | Une phrase par espace pour aider VICTOR à choisir : `nom:description;…` |
 | `VICTOR_TASK_TIMEOUT` | `600` | Durée max d'une tâche (secondes) |
 | `VICTOR_PERMISSION_MODE` | `bypassPermissions` | Autorisations des sessions Claude Code (voir Sécurité) |
+| `NEMETON_PROJETS` | `~/.local/share/nemeton/projects` | Dossier des projets Néméton, surveillé pour annoncer la fin des calculs |
 | `VICTOR_PORT` | `8788` | Port du serveur local |
 
 ---
