@@ -246,7 +246,13 @@ un avertissement dans la console au démarrage.
 Si un espace s'appelle `nemeton` (celui qui porte le serveur MCP Néméton),
 VICTOR sait piloter les diagnostics forestiers :
 
-- « Où en est le projet Couchey ? » → réponse courte + rapport à l'écran ;
+- « Où en est le projet Couchey ? », « ses points faibles ? » → **voie
+  rapide** : VICTOR lit lui-même la fiche du projet (`fiche.json`, écrite par
+  l'outil `fiche_projet` de nemetonmcp) et l'état du calcul, sans Claude Code
+  ni R. Réponse en quelques millisecondes, tableau de bord à l'écran. Il
+  signale une fiche périmée et la fait refaire par Claude Code si besoin ;
+  après chaque calcul terminé, il la refait seul en tâche de fond
+  (`Rscript`) ;
 - « Ouvre l'Atlas de Couchey » → la **vue artéfact** publiée sur claude.ai
   s'ouvre dans le navigateur (de même pour la sélection de parcelles d'une
   commune, le calcul et le plan d'actions). La vue doit avoir été publiée une
@@ -307,6 +313,7 @@ puis `systemctl --user enable --now nemetonshiny`.
 | `VICTOR_TASK_TIMEOUT` | `600` | Durée max d'une tâche (secondes) |
 | `VICTOR_PERMISSION_MODE` | `bypassPermissions` | Autorisations des sessions Claude Code (voir Sécurité) |
 | `NEMETON_PROJETS` | `~/.local/share/nemeton/projects` | Dossier des projets Néméton, surveillé pour annoncer la fin des calculs |
+| `NEMETON_MCP_VUES_DIR` | `~/.cache/R/nemetonmcp/vues` | Dossier des fichiers écrits par nemetonmcp, où la voie rapide lit `projets/<id>/fiche.json` (même variable que nemetonmcp) |
 | `VICTOR_PORT` | `8788` | Port du serveur local |
 
 ---

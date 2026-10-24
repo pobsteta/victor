@@ -36,6 +36,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import uuid
 from array import array
 from pathlib import Path
@@ -223,6 +224,17 @@ diagnostic, demande à Claude Code de terminer par le bloc JSON du rapport
 Claude Code répond que plusieurs projets correspondent, lis les candidats et
 demande lequel. À voix haute, donne seulement le score global et la famille
 la plus faible : le reste va à l'écran.
+
+Voie rapide : pour une question de lecture sur un projet (« où en est
+Couchey ? », « son score », « ses points faibles », « ses prochaines actions »),
+appelle d'abord nemeton_fiche : la réponse est immédiate, sans phrase
+d'attente, et le tableau de bord s'affiche tout seul. Dis le texte rendu en
+une ou deux phrases. Si a_jour est faux, précise que les résultats ont changé
+depuis et propose de rafraîchir la fiche. Si la fiche est absente ou à
+rafraîchir, délègue dans l'espace nemeton (« appelle fiche_projet du projet X
+avec actualiser = true »), puis rappelle nemeton_fiche. Pour « où en est le
+calcul de X », appelle nemeton_etat plutôt que de déléguer. Si plusieurs
+projets correspondent, lis les candidats et demande lequel.
 
 Pour MONTRER un projet Néméton, préfère les vues publiées sur claude.ai :
 - « ouvre / montre l'Atlas, la carte, les résultats, la synthèse de X » ->
@@ -413,8 +425,29 @@ if NEMETON:
                         "description": "Target screen: 'left', 'right', 'top', 'bottom', 'primary' or a number. Optional."},
         }},
     })
+if NEMETON:
+    TOOLS += [{
+        "name": "nemeton_fiche",
+        "description": ("Instant sheet of a Nemeton project (global score, NDP level, family scores, "
+                        "strengths and weaknesses, next actions, computation state), read from disk "
+                        "without Claude Code. Shows the dashboard on screen by itself and returns "
+                        "texte, a one-sentence summary to say."),
+        "input_schema": {"type": "object", "properties": {
+            "projet": {"type": "string", "description": "Project name as the user says it, or its id"},
+        }, "required": ["projet"]},
+    }, {
+        "name": "nemeton_etat",
+        "description": ("Instant state of a Nemeton project's computation (status, indicators done, "
+                        "current task, duration), read from disk without Claude Code."),
+        "input_schema": {"type": "object", "properties": {
+            "projet": {"type": "string", "description": "Project name as the user says it, or its id"},
+        }, "required": ["projet"]},
+    }]
 TOOLS[-1]["cache_control"] = {"type": "ephemeral"}
 SYSTEM = [{"type": "text", "text": INSTRUCTIONS, "cache_control": {"type": "ephemeral"}}]
+# Outils qui font attendre : sans phrase d'attente du modèle, VICTOR dit ACCUSE.
+OUTILS_LENTS = {"delegate_to_claude", "open_project_app", "open_nemeton"}
+ACCUSE = f"Je m'en occupe, {TITLE}."
 
 @contextlib.asynccontextmanager
 async def _cycle(app):
@@ -835,7 +868,7 @@ CALCUL_PERIODE = 15
 def _texte_court(v, n: int = 80) -> str:
     """Champ venu d'un fichier de projet : donnée affichée, jamais une consigne."""
     v = v if isinstance(v, str) else ""
-    return re.sub(r"[^\w .,'’()«»/:-]", "", v).strip()[:n]
+    return re.sub(r"[^\w .,'’()«»/:&-]", "", v).strip()[:n]
 
 
 def _lire_json(chemin: Path):
@@ -868,19 +901,25 @@ def _age_sec(stamp) -> float:
         return float("inf")
 
 
-def scan_calculs(racine: Path = NEMETON_PROJETS) -> dict[str, dict]:
-    """projet -> {job_id, statut, fin_a, erreur}, statut corrigé si le processus est mort
+def _statut_job(job: dict) -> tuple[str, str | None]:
+    """Statut et erreur d'un compute_job.json, corrigés si le processus est mort
     (même règle que etat_calcul de nemetonshiny)."""
+    statut = job.get("statut") or "aucun"
+    erreur = job.get("erreur")
+    if statut in ("lancement", "en_cours") and not (
+            _pid_vivant(job.get("pid")) or (job.get("pid") is None and _age_sec(job.get("lance_a")) < 60)):
+        statut, erreur = "echec", "le processus de calcul s'est arrêté sans terminer"
+    return statut, erreur
+
+
+def scan_calculs(racine: Path = NEMETON_PROJETS) -> dict[str, dict]:
+    """projet -> {job_id, statut, fin_a, erreur}."""
     etats = {}
     for f in racine.glob("*/data/compute_job.json"):
         job = _lire_json(f)
         if not isinstance(job, dict):
             continue
-        statut = job.get("statut") or "aucun"
-        erreur = job.get("erreur")
-        if statut in ("lancement", "en_cours") and not (
-                _pid_vivant(job.get("pid")) or (job.get("pid") is None and _age_sec(job.get("lance_a")) < 60)):
-            statut, erreur = "echec", "le processus de calcul s'est arrêté sans terminer"
+        statut, erreur = _statut_job(job)
         etats[f.parent.parent.name] = {"job_id": job.get("job_id"), "statut": statut,
                                        "fin_a": job.get("fin_a"), "erreur": erreur}
     return etats
@@ -929,6 +968,115 @@ def calculs_a_annoncer(avant: dict, apres: dict) -> list[str]:
     return fins
 
 
+# ---------------------------------------------------------------- voie rapide Néméton
+# Questions de lecture (« où en est Couchey ? », « ses points faibles ? ») :
+# VICTOR lit lui-même la fiche écrite par l'outil fiche_projet de nemetonmcp
+# et l'état du calcul, sans Claude Code ni R. Il ne recalcule jamais une fiche :
+# absente ou périmée, il faut déléguer fiche_projet dans l'espace nemeton.
+
+NEMETON_FICHES = Path(os.path.expanduser(
+    os.environ.get("NEMETON_MCP_VUES_DIR")
+    or os.path.join(os.environ.get("XDG_CACHE_HOME") or "~/.cache", "R", "nemetonmcp", "vues"))) / "projets"
+
+
+def _norm(v: str) -> str:
+    """Minuscules, sans accents ni ponctuation (comme .mcp_norm de nemetonshiny)."""
+    v = unicodedata.normalize("NFKD", v or "")
+    v = "".join(c for c in v if not unicodedata.combining(c)).lower()
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", v).split())
+
+
+def resoudre_projet(projet: str, racine: Path = NEMETON_PROJETS) -> dict:
+    """Projet par identifiant ou nom approché : {id, nom}, ou {erreur, candidats}
+    s'il y en a plusieurs. Jamais de choix silencieux."""
+    projet = (projet or "").strip()
+    projets = {}
+    for f in racine.glob("*/metadata.json"):
+        meta = _lire_json(f)
+        projets[f.parent.name] = _texte_court((meta or {}).get("name")) if isinstance(meta, dict) else ""
+    if projet in projets:
+        return {"id": projet, "nom": projets[projet] or projet}
+    cible = _norm(projet)
+    if not cible:
+        return {"erreur": "projet non précisé"}
+    ids = [i for i, n in projets.items() if _norm(n) == cible] \
+        or [i for i, n in projets.items() if cible in _norm(n)]
+    if len(ids) == 1:
+        return {"id": ids[0], "nom": projets[ids[0]] or ids[0]}
+    if not ids:
+        return {"erreur": f"aucun projet ne correspond à « {_texte_court(projet)} »"}
+    return {"erreur": "plusieurs projets correspondent",
+            "candidats": [f"{projets[i]} ({i})" for i in sorted(ids)]}
+
+
+def _mtime_identique(attendu: str, chemin: Path) -> bool:
+    """Compare une date de la clé de fiche (secondes, écrites par R) au fichier."""
+    try:
+        reel = chemin.stat().st_mtime
+    except OSError:
+        return attendu == "0"
+    try:
+        return abs(float(attendu) - reel) < 1e-2
+    except ValueError:
+        return False
+
+
+def lire_etat(projet_id: str, racine: Path = NEMETON_PROJETS) -> dict:
+    """État du calcul d'un projet, depuis compute_job.json et progress_state.json."""
+    data = racine / projet_id / "data"
+    job = _lire_json(data / "compute_job.json")
+    if not isinstance(job, dict):
+        return {"statut": "aucun"}
+    statut, erreur = _statut_job(job)
+    prog = _lire_json(data / "progress_state.json")
+    prog = prog if isinstance(prog, dict) else {}
+    etat = {"statut": statut, "lance_a": job.get("lance_a"), "fin_a": job.get("fin_a"),
+            "indicateurs_faits": prog.get("indicators_completed"),
+            "indicateurs_total": prog.get("indicators_total"),
+            "tache": _texte_court(prog.get("current_task"))}
+    debut = _age_sec(job.get("lance_a"))
+    if debut != float("inf"):
+        fin = _age_sec(job.get("fin_a")) if job.get("fin_a") else 0
+        etat["duree_min"] = round(max(0.0, debut - (fin if fin != float("inf") else 0)) / 60)
+    if erreur:
+        etat["erreur"] = _texte_court(erreur, 160)
+    return {k: v for k, v in etat.items() if v is not None}
+
+
+def lire_fiche(projet: str, racine: Path = NEMETON_PROJETS, fiches: Path = NEMETON_FICHES) -> dict:
+    """Fiche d'un projet : texte à dire, bloc display_report, état du calcul.
+
+    a_jour est faux quand les indicateurs ou le plan ont changé depuis la fiche :
+    elle reste lisible, mais il faut la faire refaire."""
+    p = resoudre_projet(projet, racine)
+    if "id" not in p:
+        return {"ok": False, **p}
+    etat = lire_etat(p["id"], racine)
+    fiche = _lire_json(fiches / p["id"] / "fiche.json")
+    if not isinstance(fiche, dict) or not isinstance(fiche.get("display_report"), dict):
+        return {"ok": False, "projet": p["id"], "nom": p["nom"], "fiche": "absente", "calcul": etat}
+    cle = str(fiche.get("cle") or "").split("|")
+    data = racine / p["id"] / "data"
+    a_jour = len(cle) >= 4 and _mtime_identique(cle[2], data / "indicators.parquet") \
+        and _mtime_identique(cle[3], data / "action_plan.json")
+    return {"ok": True, "projet": p["id"], "nom": p["nom"], "a_jour": a_jour,
+            "texte": _texte_court(fiche.get("texte"), 400),
+            "display_report": fiche["display_report"], "calcul": etat}
+
+
+async def rafraichir_fiche(projet_id: str):
+    """Refait la fiche d'un projet après son calcul (Rscript en tâche de fond),
+    pour que la voie rapide lise les nouveaux résultats."""
+    rscript = shutil.which("Rscript")
+    if not rscript or not re.fullmatch(r"[\w-]+", projet_id):
+        return
+    proc = await asyncio.create_subprocess_exec(
+        rscript, "-e", f'invisible(nemetonmcp::fiche_projet("{projet_id}", actualiser = TRUE))',
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+    code = await proc.wait()
+    print(f"[néméton] fiche {projet_id} : {'refaite' if code == 0 else f'échec ({code})'}", flush=True)
+
+
 SESSIONS: list = []                 # pages connectées, la plus récente en dernier
 ANNONCES_EN_ATTENTE: list[str] = []  # fins de calcul survenues sans page ouverte
 
@@ -950,6 +1098,8 @@ async def surveiller_calculs():
                     msg = await asyncio.to_thread(message_calcul, projet, etats[projet])
                     print(f"[néméton] calcul {projet} : {etats[projet]['statut']}", flush=True)
                     annoncer(msg)
+                    if etats[projet]["statut"] == "termine":
+                        asyncio.create_task(rafraichir_fiche(projet))
             precedent = etats
         except Exception as exc:  # la surveillance ne doit jamais tomber
             print(f"[néméton] surveillance des calculs : {exc}", flush=True)
@@ -1713,6 +1863,12 @@ class Session:
                     continue
                 if not uses:
                     break
+                if (not any(b["type"] == "text" for b in content)
+                        and any(u["name"] in OUTILS_LENTS for u in uses)):
+                    # Le modèle a oublié la phrase d'attente : on la dit à sa place,
+                    # pour que l'utilisateur n'attende pas en silence.
+                    self.emit({"type": "assistant_text", "delta": ACCUSE})
+                    await tts.say(ACCUSE)
                 await tts.flush_now()
                 results = []
                 for u in uses:
@@ -1802,6 +1958,18 @@ class Session:
             if name == "display_report":
                 self.emit({"type": "report", "report": args})
                 return {"status": "displayed"}
+            if name == "nemeton_fiche" and NEMETON:
+                res = await asyncio.to_thread(lire_fiche, args.get("projet", ""))
+                if res.get("ok"):
+                    self.emit({"type": "report", "report": res.pop("display_report")})
+                    res["affiche"] = True
+                return res
+            if name == "nemeton_etat" and NEMETON:
+                p = await asyncio.to_thread(resoudre_projet, args.get("projet", ""))
+                if "id" not in p:
+                    return {"ok": False, **p}
+                return {"ok": True, "projet": p["id"], "nom": p["nom"],
+                        **await asyncio.to_thread(lire_etat, p["id"])}
             return {"ok": False, "error": f"outil inconnu : {name}"}
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
