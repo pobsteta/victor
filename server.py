@@ -235,6 +235,13 @@ rafraîchir, délègue dans l'espace nemeton (« appelle fiche_projet du projet 
 avec actualiser = true »), puis rappelle nemeton_fiche. Pour « où en est le
 calcul de X », appelle nemeton_etat plutôt que de déléguer. Si plusieurs
 projets correspondent, lis les candidats et demande lequel.
+Après le texte de la fiche, termine TOUJOURS par une question courte qui
+propose l'Atlas : si atlas_url est présent, « Voulez-vous que j'ouvre l'Atlas
+de X ? » ; s'il répond oui, appelle directement open_url avec atlas_url, sans
+déléguer (si atlas_a_jour est faux, précise d'abord que l'Atlas publié montre
+les résultats d'avant le dernier calcul). Sans atlas_url, propose plutôt de
+publier l'Atlas (délégation dans l'espace nemeton, voir plus bas). N'ouvre
+jamais l'Atlas sans son accord.
 
 Pour MONTRER un projet Néméton, préfère les vues publiées sur claude.ai :
 - « ouvre / montre l'Atlas, la carte, les résultats, la synthèse de X » ->
@@ -1043,6 +1050,19 @@ def lire_etat(projet_id: str, racine: Path = NEMETON_PROJETS) -> dict:
     return {k: v for k, v in etat.items() if v is not None}
 
 
+def vue_publiee(projet_id: str, type_vue: str = "atlas") -> dict | None:
+    """Vue claude.ai publiée pour ce projet (registre data/vues.json de l'espace
+    nemeton) : {url, maj}, ou None. Seules les URL d'artéfact claude.ai passent."""
+    if not NEMETON:
+        return None
+    vues = _lire_json(Path(ESPACES["nemeton"]["path"]) / "data" / "vues.json")
+    v = ((vues or {}).get(projet_id) or {}).get(type_vue) if isinstance(vues, dict) else None
+    url = v.get("url") if isinstance(v, dict) else None
+    if not isinstance(url, str) or not re.fullmatch(r"https://claude\.ai/artifact/[\w-]+", url):
+        return None
+    return {"url": url, "maj": str(v.get("maj") or "")}
+
+
 def lire_fiche(projet: str, racine: Path = NEMETON_PROJETS, fiches: Path = NEMETON_FICHES) -> dict:
     """Fiche d'un projet : texte à dire, bloc display_report, état du calcul.
 
@@ -1059,9 +1079,14 @@ def lire_fiche(projet: str, racine: Path = NEMETON_PROJETS, fiches: Path = NEMET
     data = racine / p["id"] / "data"
     a_jour = len(cle) >= 4 and _mtime_identique(cle[2], data / "indicators.parquet") \
         and _mtime_identique(cle[3], data / "action_plan.json")
-    return {"ok": True, "projet": p["id"], "nom": p["nom"], "a_jour": a_jour,
-            "texte": _texte_court(fiche.get("texte"), 400),
-            "display_report": fiche["display_report"], "calcul": etat}
+    res = {"ok": True, "projet": p["id"], "nom": p["nom"], "a_jour": a_jour,
+           "texte": _texte_court(fiche.get("texte"), 400),
+           "display_report": fiche["display_report"], "calcul": etat}
+    atlas = vue_publiee(p["id"], "atlas")
+    if atlas:
+        res["atlas_url"] = atlas["url"]
+        res["atlas_a_jour"] = atlas["maj"] >= str(etat.get("fin_a") or "")
+    return res
 
 
 async def rafraichir_fiche(projet_id: str):
