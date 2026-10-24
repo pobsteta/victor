@@ -688,6 +688,21 @@ function openNemeton(url) {
   }
 }
 
+// URL ouverte à la demande de VICTOR : un onglet à côté de cette page. Les vues
+// claude.ai partagent un onglet nommé, réutilisé d'une vue à l'autre ; les
+// autres sites ont chacun le leur.
+function openTab(url) {
+  if (!/^https?:\/\//.test(url || "")) return;
+  const nom = /^https:\/\/claude\.ai\/artifact\//.test(url) ? "victor-vues" : "_blank";
+  const w = window.open(url, nom);
+  if (!w) {
+    send({ type: "open_tab_fallback", url });
+    addCard("Fenêtres pop-up", "Autorise les fenêtres pop-up pour cette page (icône à droite de la barre d'adresse) : les liens s'ouvriront alors dans un onglet à côté de VICTOR.", "warning");
+    return;
+  }
+  try { w.focus(); } catch (_) { /* rien */ }
+}
+
 // Fin de chargement : l'onglet Néméton (ouvert par cette page, donc avec
 // window.opener) envoie {source: "nemetonshiny", type: "ready"|"invalid",
 // project, tab} par postMessage quand l'onglet demandé est affiché et que Shiny
@@ -867,6 +882,9 @@ function handleEvent(ev) {
       break;
     case "open_nemeton":
       openNemeton(ev.url);
+      break;
+    case "open_tab":
+      openTab(ev.url);
       break;
     case "report":
       try { showReport(ev.report || {}); } catch (err) { addCard("Rapport", String(err), "warning"); }

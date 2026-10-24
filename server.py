@@ -1651,6 +1651,7 @@ class Session:
         self.stt = STT(self)
         self.bg: set[asyncio.Task] = set()
         self.closed = False
+        self.onglets: set[str] = set()      # URL confiées à la page, pour son repli
 
     # -- sortie vers le navigateur (une seule tâche écrit dans le WebSocket)
     def emit(self, obj):
@@ -1728,6 +1729,10 @@ class Session:
             self.nemeton_status(m)
         elif t == "open_fallback" and NEMETON and nemeton_url_ok(m.get("url") or ""):
             # Fenêtres pop-up bloquées dans la page : on ouvre côté serveur (nouvel onglet).
+            print(f"[page] pop-up bloquée, ouverture par le serveur : {m['url']}", flush=True)
+            await asyncio.to_thread(open_target, url=m["url"])
+        elif t == "open_tab_fallback" and (m.get("url") or "") in self.onglets:
+            # Pop-up bloquée dans la page : le serveur ouvre l'URL qu'il lui avait confiée.
             print(f"[page] pop-up bloquée, ouverture par le serveur : {m['url']}", flush=True)
             await asyncio.to_thread(open_target, url=m["url"])
         elif t == "cancel_task":
@@ -1943,6 +1948,16 @@ class Session:
             if name == "open_url":
                 self.emit({"type": "card", "title": "Lancement", "kind": "info",
                            "content": f"Ouverture de **{args.get('url', '')}**"})
+                if not args.get("monitor"):
+                    # Sans écran précis, la page ouvre l'URL dans un onglet à côté
+                    # d'elle ; lancé par le serveur, le navigateur ouvrirait une
+                    # nouvelle fenêtre.
+                    url = (args.get("url") or "").strip()
+                    if not url.startswith(("http://", "https://")):
+                        url = "https://" + url
+                    self.onglets.add(url)
+                    self.emit({"type": "open_tab", "url": url})
+                    return {"ok": True, "opened": url, "via": "onglet du navigateur de VICTOR"}
                 return await asyncio.to_thread(open_target, url=args.get("url", ""),
                                                monitor=args.get("monitor"))
             if name == "open_project_app":
