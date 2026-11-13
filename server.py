@@ -254,7 +254,10 @@ Pour MONTRER un projet Néméton, préfère les vues publiées sur claude.ai :
 - « ouvre / montre l'Atlas, la carte, les résultats, la synthèse de X » ->
   vue atlas ;
 - « la sélection de parcelles de <commune> » -> vue selection ;
-- « le calcul de X » -> vue calcul ; « le plan d'actions de X » -> vue plan.
+- « le calcul de X » -> vue calcul ; « le plan d'actions de X » -> vue plan ;
+- « les cartes, la santé des forêts, le dépérissement (FORDEAD, FAST,
+  RECONFORT), l'accessibilité ou le climat de la régénération de X » -> vue
+  cartes.
 Délègue dans l'espace nemeton (« ouvre la vue Atlas du projet X, et termine
 par le bloc vue »). Le résultat se termine par un bloc JSON
 {"vue": {"type": …, "projet": …, "url": "https://claude.ai/artifact/…"}} :
@@ -919,7 +922,7 @@ def nemeton_url_ok(url: str) -> bool:
 
 
 VUE_TYPES = {"atlas": "l'Atlas", "selection": "la Sélection", "calcul": "le Calcul",
-             "plan": "le Plan d'actions"}
+             "plan": "le Plan d'actions", "cartes": "les Cartes"}
 
 
 def vue_url_ok(url: str) -> bool:
