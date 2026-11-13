@@ -1384,7 +1384,9 @@ async def prod_visuels(etape: int, scenes: list[str], mode: str) -> dict:
         for s in scenes:
             n = int(s[1:])
             debut, fin = tcs.get(n, ("00:00:00", "00:00:30"))
-            secondes = max(5, _sec(fin) - _sec(debut))
+            # + 3 s : Playwright perd un peu plus d'une seconde à l'enregistrement, et
+            # assemblage-ffmpeg.sh coupe la voix off à la durée du rush (-shortest).
+            secondes = max(5, _sec(fin) - _sec(debut)) + 3
             sortie = f"captures/{n:02d}-visuel-{s}.webm"
             if not await prod_script(etape, "animation", [node, str(ROOT / "enregistrer_visuel.js"),
                                                           f"{page.as_uri()}#{s}", sortie, str(secondes)],
