@@ -65,6 +65,8 @@ def load_env():
 
 load_env()
 
+import production as prod  # noqa: E402 - lit VICTOR_KIT_VIDEO, donc après load_env()
+
 
 def env_float(name, default):
     try:
@@ -209,6 +211,11 @@ courte avant de déléguer. Sans précision possible, l'espace par défaut est
 
 NEMETON = "nemeton" in ESPACES
 NEMETON_URL = "http://127.0.0.1:3838"
+# Production de la vidéo tutoriel (specs/BRIEF-pilotage-video-victor-aigora.md) :
+# il faut l'espace nemeton (serveur MCP) et le kit de production.
+PRODUCTION = NEMETON and prod.KIT.is_dir()
+if NEMETON and not PRODUCTION:
+    print(f"  ⚠  kit vidéo introuvable ({prod.KIT}) : production vidéo désactivée (VICTOR_KIT_VIDEO)")
 if NEMETON:
     INSTRUCTIONS += """
 
@@ -272,6 +279,47 @@ Après open_nemeton, ne dis JAMAIS que c'est ouvert ou prêt : dis que
 l'application se charge et qu'il faut patienter un instant. Un message
 [SYSTÈME] « Néméton » t'apprendra quand la page est entièrement affichée :
 annonce alors, en une phrase, que l'utilisateur peut reprendre la main."""
+
+if PRODUCTION:
+    INSTRUCTIONS += f"""
+
+Production de la vidéo tutoriel « Nemeton : analyser un territoire forestier
+en huit minutes » : tu ORCHESTRES, tu ne captures pas (Playwright filme, le
+package R produit les images). Le déroulé compte huit étapes, S0 à S7 ;
+l'outil production_video tient le journal et sait où on en est. Dès qu'il est
+question de la vidéo, du tutoriel ou du tournage, appelle d'abord
+production_video avec action etat, annonce l'étape suivante en une phrase et
+propose de la lancer. Annonce l'avancement à chaque étape.
+- S0 : action demarrer avec le projet de démo (par exemple Marsannay-la-Côte).
+  S'il est introuvable, demande d'importer les parcelles dans l'application.
+- S1 : action visuels, etape 1 (scènes s1 et s2). Mode enregistrer pour un
+  rush filmé automatiquement, mode ouvrir pour l'enregistrer soi-même avec OBS.
+- S2 : rien à piloter. Propose de dicter les trois commandes d'installation :
+  install.packages remotes, remotes::install_github pobsteta/nemeton, puis
+  library nemeton.
+- S3 : action radar_demo (radar de la parcelle un du jeu de démonstration).
+- S4 : délègue dans l'espace nemeton le déroulé des six fonctions du workflow
+  dans R (texte de la séquence cinq dans {prod.KIT / "prompts-voix-off.md"}),
+  avec etape 4 et action_production workflow. La scène s5 des visuels illustre
+  cette séquence si on la veut.
+- S5 : action enregistrer_app (Playwright filme l'application), puis délègue
+  dans l'espace nemeton, avec etape 5, UN outil MCP par délégation et dans cet
+  ordre : action_production lancer_calcul ; puis, seulement après le message
+  [SYSTÈME] de fin de calcul, generer_rapport ; puis exporter_gpkg. Le suivi
+  du calcul, toutes les cinq secondes, et les captures 07 sont automatiques :
+  n'interroge pas etat_calcul. Enfin action arreter_enregistrement.
+- S6 : action visuels, etape 6.
+- S7 : action resume (liste des rushes pour le montage), puis assembler. Si
+  assembler signale une incohérence du nombre d'indicateurs (trente et un
+  contre quarante et un), dis-le et demande quoi faire ; ne passe forcer à
+  vrai que sur son accord explicite.
+Quand une étape est entièrement faite, appelle terminer_etape avec son
+numéro (S0, S3 et S7 se terminent seules). Toute délégation de la production
+porte etape et action_production. Ne lance jamais deux calculs à la fois.
+Si un message [SYSTÈME] « Production vidéo arrêtée » arrive, ou si un outil
+répond arretee, annonce l'erreur en une phrase et ARRÊTE-TOI : aucun repli,
+aucune autre action de production tant que l'utilisateur n'a pas dit de
+reprendre (action reprendre)."""
 
 TOOLS = [{
     "name": "delegate_to_claude",
@@ -431,6 +479,40 @@ if NEMETON:
             "monitor": {"type": "string",
                         "description": "Target screen: 'left', 'right', 'top', 'bottom', 'primary' or a number. Optional."},
         }},
+    })
+if PRODUCTION:
+    TOOLS[0]["input_schema"]["properties"].update({
+        "etape": {"type": "integer", "minimum": 0, "maximum": 7,
+                  "description": "Video production only: step S0-S7 of the production brief"},
+        "action_production": {"type": "string",
+                              "description": ("Video production only: MCP tool or short verb "
+                                              "(lancer_calcul, generer_rapport, exporter_gpkg, workflow…)")},
+    })
+    TOOLS.append({
+        "name": "production_video",
+        "description": ("Pilot the Nemeton tutorial video production: state and journal of the "
+                        "8 steps (S0-S7), local steps (animated visuals, demo radar, app recording "
+                        "and captures, rushes summary, final FFmpeg assembly). Long actions return "
+                        "at once and report later through [SYSTÈME] « Production vidéo » messages."),
+        "input_schema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": [
+                "etat", "demarrer", "visuels", "radar_demo", "enregistrer_app", "capture",
+                "arreter_enregistrement", "resume", "assembler", "terminer_etape", "journal",
+                "reprendre"]},
+            "projet": {"type": "string", "description": "demarrer: demo project name or id"},
+            "etape": {"type": "integer", "minimum": 0, "maximum": 7,
+                      "description": "visuels (1 or 6), terminer_etape, journal"},
+            "scenes": {"type": "array", "items": {"type": "string", "enum": ["s1", "s2", "s5", "s6", "s8"]},
+                       "description": "visuels: scenes to show (default: those of the step)"},
+            "mode": {"type": "string", "enum": ["enregistrer", "ouvrir"],
+                     "description": "visuels: record with Playwright (default) or open for OBS"},
+            "nom": {"type": "string", "description": "capture: file name without extension, e.g. 07-06-synthese"},
+            "evenement": {"type": "string", "description": "journal: short verb"},
+            "statut": {"type": "string", "enum": ["OK", "ERREUR", "ATTENTE"], "description": "journal"},
+            "detail": {"type": "string", "description": "journal / reprendre: short detail"},
+            "forcer": {"type": "boolean",
+                       "description": "assembler: go on despite an indicator count mismatch (user's explicit consent only)"},
+        }, "required": ["action"]},
     })
 if NEMETON:
     TOOLS += [{
@@ -1122,7 +1204,8 @@ async def surveiller_calculs():
                 for projet in calculs_a_annoncer(precedent, etats):
                     msg = await asyncio.to_thread(message_calcul, projet, etats[projet])
                     print(f"[néméton] calcul {projet} : {etats[projet]['statut']}", flush=True)
-                    annoncer(msg)
+                    if projet not in PROD_SUIVIS:  # sinon la production l'annonce déjà
+                        annoncer(msg)
                     if etats[projet]["statut"] == "termine":
                         asyncio.create_task(rafraichir_fiche(projet))
             precedent = etats
@@ -1161,6 +1244,397 @@ def open_nemeton(url: str | None = None, monitor: str | None = None, timeout: fl
     res = open_target(url=url, monitor=monitor)
     res["service_started"] = started
     return res
+
+
+# ---------------------------------------------------------------- production de la vidéo Néméton
+# VICTOR déroule le brief specs/BRIEF-pilotage-video-victor-aigora.md : il
+# orchestre (MCP via Claude Code, scripts du kit), journalise chaque étape et
+# s'arrête à la première erreur, sans repli silencieux. Le journal fait foi :
+# l'état de la production survit aux redémarrages du serveur.
+
+PROD_SONDE = 5                                                    # s entre deux etat_calcul
+PROD_CALCUL_TIMEOUT = int(env_float("VICTOR_PROD_CALCUL_TIMEOUT", 600))
+PROD_SUIVIS: set[str] = set()       # calculs suivis par la production : pas de double annonce
+PROD_PROCS: dict = {}               # « enregistrement », « assemblage »… -> processus en cours
+PROD_TACHES: set = set()            # tâches de fond gardées en vie
+PROD_CONSIGNE = (
+    "\n\nConsigne de production vidéo (brief de pilotage VICTOR) : appelle l'outil MCP demandé "
+    "une seule fois, sans repli ni contournement s'il échoue. Termine ta réponse par une "
+    "dernière ligne exactement « PRODUCTION: OK <détail court, par exemple le fichier produit> » "
+    "si l'outil a réussi, ou « PRODUCTION: ERREUR <raison> » sinon.")
+# Capture demandée à Playwright quand une action MCP de l'étape 5 réussit.
+PROD_CAPTURES = {"lancer_calcul": "07-02-calcul-lance", "generer_rapport": "07-04-rapport",
+                 "exporter_gpkg": "07-05-export"}
+
+
+def prod_fond(coro):
+    t = asyncio.create_task(coro)
+    PROD_TACHES.add(t)
+    t.add_done_callback(PROD_TACHES.discard)
+    return t
+
+
+def prod_ok(etape: int, action: str, detail: str = "", annonce: str | None = None) -> str:
+    ligne = prod.journaliser(etape, action, "OK", detail)
+    print(f"[production] {ligne}", flush=True)
+    if annonce:
+        annoncer(f"[SYSTÈME] Production vidéo : {annonce}")
+    return ligne
+
+
+def prod_arret(etape: int, action: str, detail: str, annonce: bool = True) -> dict:
+    """Erreur : consignée, puis la production s'arrête et VICTOR l'annonce
+    (annonce=False quand l'appelant transmet lui-même la consigne d'arrêt)."""
+    ligne = prod.journaliser(etape, action, "ERREUR", detail)
+    print(f"[production] {ligne}", flush=True)
+    if annonce:
+            annoncer(f"[SYSTÈME] Production vidéo arrêtée à l'étape S{etape} ({action}) : "
+                 f"{prod._champ(detail, 160)}. Annonce l'erreur en une phrase et arrête-toi : aucun "
+                 "repli, aucune autre action de production avant que l'utilisateur dise de reprendre.")
+    return {"ok": False, "arretee": True, "error": detail}
+
+
+def _fin_sortie(texte: str, n: int = 160) -> str:
+    lignes = [x for x in (texte or "").strip().splitlines() if x.strip()]
+    return prod._champ(lignes[-1] if lignes else "", n)
+
+
+async def prod_script(etape: int, action: str, cmd: list, produit: str | None = None,
+                      cle: str | None = None, env: dict | None = None, timeout: float = 600,
+                      annonce: str | None = None, terminer: bool = False) -> bool:
+    """Lance un script du kit en tâche de fond et journalise son issue.
+
+    produit : fichier attendu, relatif au kit (absent après un code 0 = erreur)."""
+    cle = cle or action
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, cwd=str(prod.KIT), env=env, stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            start_new_session=not IS_WINDOWS)
+    except OSError as exc:
+        prod_arret(etape, action, f"lancement impossible : {exc}")
+        return False
+    PROD_PROCS[cle] = proc
+    try:
+        try:
+            sortie, _ = await asyncio.wait_for(proc.communicate(), timeout)
+        except asyncio.TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
+            prod_arret(etape, action, f"délai dépassé ({timeout / 60:.0f} min)")
+            return False
+    finally:
+        PROD_PROCS.pop(cle, None)
+    texte = (sortie or b"").decode("utf-8", "replace")
+    if proc.returncode != 0:
+        prod_arret(etape, action, f"code {proc.returncode} : {_fin_sortie(texte) or 'pas de message'}")
+        return False
+    if produit and not (prod.KIT / produit).exists():
+        prod_arret(etape, action, f"terminé sans produire {produit}")
+        return False
+    detail = f"fichier={Path(produit).name}" if produit else _fin_sortie(texte, 80)
+    prod_ok(etape, action, detail,
+            annonce or f"{action} terminé ({detail}). Annonce-le en une phrase et propose la suite.")
+    if terminer:
+        prod_ok(etape, "etape_terminee", prod.ETAPES[etape])
+    return True
+
+
+def _node_kit() -> tuple[str | None, str | None]:
+    """node et Playwright installés dans le kit, sinon (None, raison)."""
+    node = shutil.which("node")
+    if not node:
+        return None, "node est introuvable"
+    if not (prod.KIT / "node_modules" / "playwright").is_dir():
+        return None, (f"Playwright n'est pas installé dans le kit : cd {prod.KIT} && "
+                      "npm install playwright && npx playwright install chromium")
+    return node, None
+
+
+async def prod_visuels(etape: int, scenes: list[str], mode: str) -> dict:
+    absentes = [s for s in scenes if s not in prod.SCENES_KIT]
+    scenes = [s for s in scenes if s in prod.SCENES_KIT]
+    page = prod.KIT / "visuels-animes.html"
+    if not page.exists():
+        return prod_arret(etape, "animation", f"{page.name} absent du kit", annonce=False)
+    res = {"ok": True, "scenes": scenes, "mode": mode}
+    if absentes:
+        res["absentes_du_kit"] = absentes
+        res["note"] = (f"scène(s) {', '.join(absentes)} absente(s) de visuels-animes.html : "
+                       "dis-le, il faudra les créer ou les filmer autrement")
+    if not scenes:
+        res["ok"] = False
+        return res
+    if mode == "ouvrir":
+        import webbrowser
+        for s in scenes:
+            webbrowser.open(f"{page.as_uri()}#{s}")
+            prod_ok(etape, "animation", f"scene={s} ouverte pour OBS")
+        res["consigne"] = ("dis de passer en plein écran (F11) et d'enregistrer avec OBS ; "
+                           "touches 1, 2, 5, 6 pour changer de scène, R pour rejouer")
+        return res
+    node, raison = _node_kit()
+    if not node:
+        return prod_arret(etape, "animation", raison, annonce=False)
+    tcs = prod.timecodes()
+    env = {**os.environ, "NODE_PATH": str(prod.KIT / "node_modules")}
+
+    async def filmer():
+        for s in scenes:
+            n = int(s[1:])
+            debut, fin = tcs.get(n, ("00:00:00", "00:00:30"))
+            secondes = max(5, _sec(fin) - _sec(debut))
+            sortie = f"captures/{n:02d}-visuel-{s}.webm"
+            if not await prod_script(etape, "animation", [node, str(ROOT / "enregistrer_visuel.js"),
+                                                          f"{page.as_uri()}#{s}", sortie, str(secondes)],
+                                     produit=sortie, cle="visuels", env=env, timeout=secondes + 120,
+                                     annonce=f"scène {s} filmée ({sortie}). Annonce-le en une phrase."):
+                return
+    prod_fond(filmer())
+    res["consigne"] = "le tournage des scènes tourne en fond ; un message dira la fin de chacune"
+    return res
+
+
+def _sec(tc: str) -> int:
+    h, m, s = (int(x) for x in tc.split(":"))
+    return h * 3600 + m * 60 + s
+
+
+RADAR_R = """suppressMessages(library(nemeton))
+data(massif_demo_units, package = "nemeton")
+dir.create("captures", showWarnings = FALSE)
+p <- nemeton_radar(massif_demo_units, unit_id = 1, mode = "family")
+ggplot2::ggsave("captures/04-radar-parcelle1.png", p, width = 8, height = 6, dpi = 200)
+cat("radar ecrit\\n")"""
+
+
+def prod_capture(nom: str) -> dict:
+    """Demande une capture à l'enregistrement Playwright en cours (fichier de demande)."""
+    nom = re.sub(r"[^\w.-]", "", nom or "")
+    if not re.fullmatch(r"\d\d-[\w.-]+", nom):
+        return {"ok": False, "error": "nom de capture attendu sous la forme 07-06-synthese"}
+    if "enregistrement" not in PROD_PROCS:
+        return {"ok": False, "error": "aucun enregistrement de l'application en cours (enregistrer_app)"}
+    (prod.captures() / ".demande-capture").write_text(nom, encoding="utf-8")
+
+    async def attendre():
+        png = prod.captures() / f"{nom}.png"
+        fin = time.monotonic() + 60
+        while time.monotonic() < fin:
+            if png.exists() and not (prod.captures() / ".demande-capture").exists():
+                prod_ok(5, "capture", f"fichier={png.name}")
+                return
+            await asyncio.sleep(1)
+        prod_arret(5, "capture", f"{png.name} non produite en une minute")
+    prod_fond(attendre())
+    return {"ok": True, "demandee": f"{nom}.png"}
+
+
+async def prod_suivre_calcul(projet: str, depuis: str):
+    """Sonde etat_calcul toutes les 5 s (lecture directe de compute_job.json),
+    10 min au plus. Journalise ATTENTE à chaque progrès, OK ou ERREUR à la fin."""
+    PROD_SUIVIS.add(projet)
+    try:
+        fin = time.monotonic() + PROD_CALCUL_TIMEOUT
+        dernier = None
+        while True:
+            etat = await asyncio.to_thread(lire_etat, projet)
+            statut = etat.get("statut")
+            ancien = str(etat.get("lance_a") or "") < depuis    # job d'avant notre lancement
+            if statut == "termine" and not ancien:
+                faits = etat.get("indicateurs_total") or etat.get("indicateurs_faits")
+                prod_ok(5, "etat_calcul", f"termine projet={projet}"
+                        + (f" indicateurs={faits}" if faits else ""),
+                        "le calcul du projet de démo est terminé. Annonce-le en une phrase, puis "
+                        "délègue generer_rapport (etape 5, action_production generer_rapport).")
+                if "enregistrement" in PROD_PROCS:
+                    prod_capture("07-03-calcul-termine")
+                return
+            if statut in ("echec", "annule") and not ancien:
+                prod_arret(5, "etat_calcul", f"{statut} : {etat.get('erreur') or 'sans message'}")
+                return
+            resume = f"{'attente du lancement' if ancien or statut == 'aucun' else statut}" \
+                     + (f" {etat['indicateurs_faits']}/{etat['indicateurs_total']}"
+                        if etat.get("indicateurs_total") and not ancien else "")
+            if resume != dernier:
+                prod.journaliser(5, "etat_calcul", "ATTENTE", resume)
+                dernier = resume
+            if time.monotonic() > fin:
+                prod_arret(5, "etat_calcul", f"délai de {PROD_CALCUL_TIMEOUT // 60} min dépassé, le calcul "
+                           "continue en fond (annuler_calcul possible)")
+                return
+            await asyncio.sleep(PROD_SONDE)
+    finally:
+        # surveiller_calculs verra la fin au relevé suivant : ne pas l'annoncer deux fois.
+        asyncio.get_running_loop().call_later(3 * CALCUL_PERIODE, PROD_SUIVIS.discard, projet)
+
+
+def prod_avant_delegation(args: dict) -> dict | None:
+    """Garde-fous d'une délégation de la production ; None si elle peut partir."""
+    etat = prod.etat_production()
+    if etat["arretee"]:
+        return {"ok": False, "arretee": True,
+                "error": f"production arrêtée ({etat['erreur']}) : attendre « reprendre »"}
+    if (args.get("action_production") or "") == "lancer_calcul":
+        en_cours = [p for p, e in scan_calculs().items() if e["statut"] in ("lancement", "en_cours")]
+        if en_cours:
+            return {"ok": False, "error": (f"un calcul tourne déjà ({', '.join(en_cours)}) : jamais deux "
+                                           "calculs simultanés ; annuler_calcul est disponible")}
+    return None
+
+
+def prod_fin_tache(task: dict) -> str:
+    """Issue d'une délégation de la production : journal, enchaînements, consigne."""
+    p = task["production"]
+    etape, action = p["etape"], p["action"]
+    projet = prod.etat_production().get("projet") or "?"
+    verdicts = re.findall(r"PRODUCTION:\s*(OK|ERREUR)\b[ \t]*(.*)", task.get("output") or "")
+    if task["status"] == "cancelled":
+        prod_arret(etape, action, "tâche annulée par l'utilisateur", annonce=False)
+        return "Production arrêtée : la tâche a été annulée. Dis-le en une phrase."
+    if task["status"] != "done" or not verdicts or verdicts[-1][0] != "OK":
+        raison = (verdicts[-1][1] if verdicts else "") or (
+            "statut de fin absent" if task["status"] == "done" else f"tâche en {task['status']}")
+        prod_arret(etape, action, raison, annonce=False)
+        return (f"PRODUCTION ARRÊTÉE à l'étape S{etape} ({action}, {prod._champ(raison, 120)}) : annonce cette erreur en une phrase et arrête-toi, sans "
+                "repli, jusqu'à ce que l'utilisateur dise de reprendre.")
+    prod_ok(etape, action, f"projet={projet} {prod._champ(verdicts[-1][1], 120)}".strip())
+    if action in PROD_CAPTURES and "enregistrement" in PROD_PROCS:
+        prod_capture(PROD_CAPTURES[action])
+    if action == "lancer_calcul":
+        if projet == "?":
+            prod_arret(etape, "etat_calcul", "projet de démo inconnu : refaire S0 (demarrer)", annonce=False)
+            return "PRODUCTION ARRÊTÉE : projet de démo inconnu. Dis-le en une phrase."
+        prod_fond(prod_suivre_calcul(projet, p["depuis"]))
+        return ("Production : calcul lancé et journalisé. Dis en une phrase que tu suis le calcul "
+                "et que tu annonceras sa fin ; n'interroge pas etat_calcul.")
+    return "Production : étape journalisée. Annonce-la en une phrase et propose la suite du déroulé."
+
+
+async def production_video(args: dict) -> dict:
+    action = args.get("action") or "etat"
+    etat = prod.etat_production()
+    if action == "etat":
+        return {"ok": True, **etat, "en_cours": sorted(PROD_PROCS), "kit": str(prod.KIT)}
+    if action == "reprendre":
+        if not etat["arretee"]:
+            return {"ok": True, "note": "la production n'était pas arrêtée"}
+        prod_ok(etat["prochaine_etape"] or 0, "reprise", args.get("detail") or "reprise par l'utilisateur")
+        return {"ok": True, **prod.etat_production()}
+    if action == "journal":
+        try:
+            ligne = prod.journaliser(int(args.get("etape", 0)), args.get("evenement") or "note",
+                                     args.get("statut") or "OK", args.get("detail") or "")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if (args.get("statut") or "OK").upper() == "ERREUR":
+            return {"ok": True, "ligne": ligne, "arretee": True,
+                    "consigne": "erreur consignée : annonce-la et arrête-toi jusqu'à « reprendre »"}
+        return {"ok": True, "ligne": ligne}
+    if etat["arretee"] and action not in ("demarrer", "resume"):
+        return {"ok": False, "arretee": True,
+                "error": f"production arrêtée ({etat['erreur']}) : attendre « reprendre »"}
+
+    if action == "demarrer":
+        p = await asyncio.to_thread(resoudre_projet, args.get("projet") or "")
+        if "id" not in p:
+            if p.get("candidats"):
+                return {"ok": False, **p, "consigne": "lis les candidats et demande lequel"}
+            prod_arret(0, "lister_projets", p.get("erreur") or "projet introuvable", annonce=False)
+            return {"ok": False, **p, "consigne": ("demande d'importer les parcelles du projet de démo "
+                                                   "dans l'application avant de continuer")}
+        prod_ok(0, "lister_projets", f"projet={p['id']} present")
+        app_ = await asyncio.to_thread(open_nemeton, None, None, navigateur=False)
+        if not app_.get("ok"):
+            return prod_arret(0, "url_app", app_.get("error") or "application injoignable", annonce=False)
+        url = f"{NEMETON_URL}/?project={p['id']}"
+        prod_ok(0, "url_app", f"url={url}")
+        prod_ok(0, "demarrer", f"projet={p['id']} nom={p['nom']}")
+        prod_ok(0, "etape_terminee", prod.ETAPES[0])
+        return {"ok": True, "projet": p["id"], "nom": p["nom"], "url_app": url,
+                "prochaine": prod.ETAPES[1]}
+
+    if action == "terminer_etape":
+        e = args.get("etape")
+        if e not in prod.ETAPES:
+            return {"ok": False, "error": "etape attendue (0 à 7)"}
+        prod_ok(e, "etape_terminee", prod.ETAPES[e])
+        return {"ok": True, **prod.etat_production()}
+
+    if action == "visuels":
+        e = args.get("etape") if args.get("etape") in prod.ETAPES else (etat["prochaine_etape"] or 1)
+        scenes = args.get("scenes") or prod.SCENES_ETAPE.get(e, ["s1", "s2"])
+        return await prod_visuels(e, scenes, args.get("mode") or "enregistrer")
+
+    if action == "radar_demo":
+        rscript = shutil.which("Rscript")
+        if not rscript:
+            return prod_arret(3, "radar", "Rscript est introuvable", annonce=False)
+        prod_fond(prod_script(3, "radar", [rscript, "-e", RADAR_R],
+                              produit="captures/04-radar-parcelle1.png", timeout=300, terminer=True))
+        return {"ok": True, "lance": "radar de la parcelle un", "note": "un message dira la fin"}
+
+    if action == "enregistrer_app":
+        if "enregistrement" in PROD_PROCS:
+            return {"ok": False, "error": "un enregistrement de l'application tourne déjà"}
+        node, raison = _node_kit()
+        if not node:
+            return prod_arret(5, "enregistrement", raison, annonce=False)
+        if not etat["projet"]:
+            return {"ok": False, "error": "projet de démo inconnu : faire d'abord S0 (demarrer)"}
+        app_ = await asyncio.to_thread(open_nemeton, None, None, navigateur=False)
+        if not app_.get("ok"):
+            return prod_arret(5, "enregistrement", app_.get("error") or "application injoignable", annonce=False)
+        url = f"{NEMETON_URL}/?project={etat['projet']}"
+        env = {**os.environ, "APP_URL": url, "DUREE_MAX": "3600"}
+        prod.journaliser(5, "enregistrement", "ATTENTE", f"url={url}")
+        prod_fond(prod_script(5, "enregistrement", [node, "enregistrement_playwright.js"],
+                              produit="captures/video-nemetonshiny.webm", env=env, timeout=3700))
+        return {"ok": True, "url": url, "note": "Playwright filme l'application ; enchaîner lancer_calcul"}
+
+    if action == "capture":
+        return prod_capture(args.get("nom") or "")
+
+    if action == "arreter_enregistrement":
+        if "enregistrement" not in PROD_PROCS:
+            return {"ok": False, "error": "aucun enregistrement en cours"}
+        (prod.captures() / ".stop").write_text("", encoding="utf-8")
+        return {"ok": True, "note": "la vidéo se finalise ; un message dira quand elle est écrite"}
+
+    if action == "resume":
+        chemin, manquants = await asyncio.to_thread(prod.resume_rushes)
+        prod_ok(7, "resume_rushes", f"fichier={chemin.name}"
+                + (f" sans_rush={','.join(manquants)}" if manquants else ""))
+        res = {"ok": True, "fichier": str(chemin), "sequences_sans_rush": manquants}
+        if manquants:
+            res["consigne"] = (f"dis qu'il manque le rush retenu de {len(manquants)} séquence(s) : "
+                               f"le placer dans {prod.KIT / 'rushes'} sous le nom S<n>.<ext>")
+        return res
+
+    if action == "assembler":
+        if "assemblage" in PROD_PROCS:
+            return {"ok": False, "error": "un assemblage tourne déjà"}
+        verif = prod.verifier_indicateurs(etat["projet"], NEMETON_PROJETS)
+        if not verif["coherent"] and not args.get("forcer"):
+            return {"ok": False, "verification_indicateurs": verif,
+                    "consigne": "dis le problème en une phrase et demande s'il faut corriger la voix off ou forcer"}
+        prod_ok(7, "verification_indicateurs", verif["avis"] + (" (forcé)" if not verif["coherent"] else ""))
+        if not shutil.which("ffmpeg") or not shutil.which("bash"):
+            return prod_arret(7, "assemblage", "ffmpeg ou bash est introuvable", annonce=False)
+        chemin, _ = await asyncio.to_thread(prod.resume_rushes)
+        manque = prod.manquants_assemblage()
+        if manque["voix"] or manque["rushes"] or not manque["srt"]:
+            return {"ok": False, "manquants": manque,
+                    "consigne": ("dis ce qui manque en une phrase : voix off dans voix/S<n>.mp3, "
+                                 "rushes dans rushes/S<n>.*")}
+        shutil.copyfile(chemin, prod.KIT / "resume-rushes.txt")    # lu par assemblage-ffmpeg.sh
+        prod_fond(prod_script(7, "assemblage", [shutil.which("bash"), "assemblage-ffmpeg.sh"],
+                              produit="nemeton-tutoriel.mp4", timeout=3600, terminer=True,
+                              annonce="la vidéo finale nemeton-tutoriel.mp4 est assemblée. Annonce-le."))
+        return {"ok": True, "lance": "assemblage FFmpeg", "note": "plusieurs minutes ; un message dira la fin"}
+
+    return {"ok": False, "error": f"action inconnue : {action}"}
 
 
 # ---------------------------------------------------------------- RStudio / QGIS sur le projet d'un espace
@@ -1928,8 +2402,17 @@ class Session:
             print(f"[outil] {name} {json.dumps(args, ensure_ascii=False)}", flush=True)
         try:
             if name == "delegate_to_claude":
-                task = start_task(args.get("title") or "Tâche", args.get("prompt") or "",
-                                  args.get("espace"))
+                production = PRODUCTION and args.get("etape") in prod.ETAPES
+                prompt = args.get("prompt") or ""
+                if production:
+                    refus = prod_avant_delegation(args)
+                    if refus:
+                        return refus
+                    prompt += PROD_CONSIGNE
+                task = start_task(args.get("title") or "Tâche", prompt, args.get("espace"))
+                if production:
+                    task["production"] = {"etape": args["etape"], "depuis": prod.horodatage(),
+                                          "action": prod._champ(args.get("action_production"), 40) or "tache"}
                 self.emit({"type": "task_started", "task": task, "multi_espaces": len(ESPACES) > 1})
                 self.spawn(self.watch_task(task["id"]))
                 return {"status": "started", "task_id": task["id"], "espace": task["espace"]}
@@ -2004,6 +2487,8 @@ class Session:
                     self.emit({"type": "report", "report": res.pop("display_report")})
                     res["affiche"] = True
                 return res
+            if name == "production_video" and PRODUCTION:
+                return await production_video(args)
             if name == "nemeton_etat" and NEMETON:
                 p = await asyncio.to_thread(resoudre_projet, args.get("projet", ""))
                 if "id" not in p:
@@ -2019,6 +2504,7 @@ class Session:
         while task["status"] == "running":
             await asyncio.sleep(1)
         self.emit({"type": "task_update", "task": task})
+        prod_consigne = prod_fin_tache(task) if task.get("production") else None
         if task["status"] == "cancelled":
             return
         summary = (task["output"] or "").strip()[:4000]
@@ -2028,6 +2514,8 @@ class Session:
             consigne = (f"Bloc vue détecté ({vue['type'] or 'vue'}, projet {vue['projet'] or '?'}) : "
                         f"appelle open_url avec url={vue['url']} puis dis en une phrase que {nom} "
                         "s'ouvre dans le navigateur. Ne lis jamais l'URL à voix haute.")
+        elif prod_consigne:
+            consigne = prod_consigne
         else:
             consigne = ("Résume oralement en une ou deux phrases. S'il s'agit d'une analyse de "
                         "données (chiffres, stats, comparatifs), affiche un tableau de bord avec "

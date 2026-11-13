@@ -287,6 +287,41 @@ WantedBy=default.target
 
 puis `systemctl --user enable --now nemetonshiny`.
 
+### Production de la vidéo tutoriel Néméton
+
+VICTOR peut dérouler le tournage de la vidéo « Nemeton : analyser un
+territoire forestier en 8 minutes » (brief : `specs/BRIEF-pilotage-video-victor-aigora.md`).
+Il faut l'espace `nemeton` et le kit de production. Le kit doit être à
+l'emplacement donné par `VICTOR_KIT_VIDEO` (par défaut `~/dev/nemeton-video`),
+avec Playwright installé dedans :
+
+```
+cd ~/dev/nemeton-video && npm install playwright && npx playwright install chromium
+```
+
+Dis « où en est la vidéo ? » ou « on tourne la vidéo » : VICTOR annonce
+l'étape suivante (S0 à S7) et la lance avec ton accord.
+
+| Étape | Ce que fait VICTOR |
+|---|---|
+| S0 | vérifie le projet de démo et l'application (sans les MCP : lecture des projets, démarrage du service) |
+| S1, S6 | filme les scènes de `visuels-animes.html` (Playwright, durée tirée du storyboard), ou les ouvre pour OBS |
+| S2 | rien à piloter ; il peut dicter les commandes d'installation |
+| S3 | `Rscript` → `captures/04-radar-parcelle1.png` |
+| S4 | délègue les six fonctions du workflow à Claude Code (espace nemeton) |
+| S5 | Playwright filme l'app (`enregistrement_playwright.js` en mode piloté) pendant que Claude Code appelle `lancer_calcul`, `generer_rapport` puis `exporter_gpkg`. VICTOR suit le calcul toutes les 5 s (10 min au plus, `VICTOR_PROD_CALCUL_TIMEOUT`) et demande les captures `07-*.png` à chaque étape |
+| S7 | écrit `captures/resume-rushes.txt`, vérifie le nombre d'indicateurs (voix off contre calcul réel), ce qui manque (`voix/S<n>.mp3`, `rushes/S<n>.*`), puis lance `assemblage-ffmpeg.sh` → `nemeton-tutoriel.mp4` |
+
+Tout est consigné dans `captures/journal.txt`, en ajout. L'état de la
+production est relu depuis ce journal : il survit aux redémarrages. À la
+première erreur, VICTOR la consigne, l'annonce et s'arrête, sans aucun repli.
+Pour repartir, dis « reprends la production ». Il ne lance jamais deux calculs
+à la fois.
+
+Dans le journal, `S0`…`S7` désignent les étapes du déroulé. Dans
+`resume-rushes.txt`, `rushes/` et `voix/`, `S1`…`S8` désignent les séquences
+du storyboard, celles que lit le script FFmpeg.
+
 ---
 
 ## 🔧 Personnalisation (fichier `.env`)
@@ -314,6 +349,8 @@ puis `systemctl --user enable --now nemetonshiny`.
 | `VICTOR_PERMISSION_MODE` | `bypassPermissions` | Autorisations des sessions Claude Code (voir Sécurité) |
 | `NEMETON_PROJETS` | `~/.local/share/nemeton/projects` | Dossier des projets Néméton, surveillé pour annoncer la fin des calculs |
 | `NEMETON_MCP_VUES_DIR` | `~/.cache/R/nemetonmcp/vues` | Dossier des fichiers écrits par nemetonmcp, où la voie rapide lit `projets/<id>/fiche.json` (même variable que nemetonmcp) |
+| `VICTOR_KIT_VIDEO` | `~/dev/nemeton-video` | Kit de production de la vidéo tutoriel Néméton |
+| `VICTOR_PROD_CALCUL_TIMEOUT` | `600` | Durée max (s) du suivi d'un calcul pendant la production vidéo |
 | `VICTOR_PORT` | `8788` | Port du serveur local |
 
 ---
