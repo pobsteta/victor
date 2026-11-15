@@ -142,6 +142,12 @@
     background: rgba(var(--a2),.08); padding: 1px 5px; border-radius: 2px;
   }
   .card .body ul { margin: 4px 0 0 16px; }
+  /* HTML produit par marked : les retours à la ligne entre balises ne doivent pas
+     devenir des lignes vides (sinon grands blancs entre les puces) */
+  .card .body.md { white-space: normal; }
+  .card .body.md > * + * { margin-top: 6px; }
+  .card .body.md ul, .card .body.md ol { margin: 4px 0 0 18px; }
+  .card .body.md li + li { margin-top: 2px; }
   .card.code .body { font-family: var(--font-mono); font-size: calc(12px * var(--fsc)); color: var(--text2); }
   .card .body pre { white-space: pre-wrap; margin: 4px 0; }
   .clip { display: flex; gap: 6px; margin: 2px 0 8px; white-space: normal; }
@@ -957,7 +963,7 @@ function addCard(title, content, kind) {
   const el = document.createElement("div");
   el.className = `card ${kind}`;
   el.innerHTML = `<h3><span>${esc(title)}</span><span class="x" title="fermer">✕</span></h3>
-    <div class="body">${mdRender(content)}</div>`;
+    <div class="body${window.marked && window.DOMPurify ? " md" : ""}">${mdRender(content)}</div>`;
   el.querySelector(".x").addEventListener("click", () => el.remove());
   // un clic sur le titre replie ou rouvre ; rouverte à la main, elle ne se replie plus seule
   el.querySelector("h3 > span").addEventListener("click", () => {
@@ -989,7 +995,7 @@ let _apex = null, _grid = null;
 
 function mdRender(text) {
   if (window.marked && window.DOMPurify) {
-    return DOMPurify.sanitize(marked.parse(text));
+    return DOMPurify.sanitize(marked.parse(text, { breaks: true }));
   }
   return mdLite(text); // offline fallback
 }
