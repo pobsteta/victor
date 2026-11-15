@@ -250,7 +250,9 @@ Voie rapide : pour une question de lecture sur un projet (« où en est
 Couchey ? », « son score », « ses points faibles », « ses prochaines actions »),
 appelle d'abord nemeton_fiche : la réponse est immédiate, sans phrase
 d'attente, et le tableau de bord s'affiche tout seul. Dis le texte rendu en
-une ou deux phrases. Si a_jour est faux, précise que les résultats ont changé
+une ou deux phrases. Si scores_a_calculer est vrai, ne cite aucun score : dis
+que les indicateurs sont à recalculer (unités de gestion ou parcelles
+modifiées) et propose de lancer le calcul. Si a_jour est faux, précise que les résultats ont changé
 depuis et propose de rafraîchir la fiche. Si la fiche est absente ou à
 rafraîchir, délègue dans l'espace nemeton (« appelle fiche_projet du projet X
 avec actualiser = true »), puis rappelle nemeton_fiche. Pour « où en est le
@@ -1367,6 +1369,12 @@ def lire_fiche(projet: str, racine: Path = NEMETON_PROJETS, fiches: Path = NEMET
     res = {"ok": True, "projet": p["id"], "nom": p["nom"], "a_jour": a_jour,
            "texte": _texte_court(fiche.get("texte"), 400),
            "display_report": fiche["display_report"], "calcul": etat}
+    # nemetonmcp 2026.11.3 : fiche d'un projet sans indicateurs à jour (brief
+    # 2026-11-15) ; c'est ce drapeau, pas global_score, qui dit « pas de score ».
+    if fiche.get("scores_a_calculer"):
+        res["scores_a_calculer"] = True
+        motif = fiche.get("motif_perime")
+        res["motif_perime"] = _texte_court(", ".join(map(str, motif)) if isinstance(motif, list) else motif, 40)
     atlas = vue_publiee(p["id"], "atlas")
     if atlas:
         res["atlas_url"] = atlas["url"]
