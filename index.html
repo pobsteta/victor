@@ -73,6 +73,9 @@
   #topbar .sys { color: var(--cyan); text-shadow: 0 0 12px rgba(var(--a1),.8); }
   #clock { color: var(--amber); }
 
+  /* Colonne des fiches : un quart de la scène au plus, quel que soit le zoom ;
+     le texte dit par VICTOR se cale entre elle et son symétrique à droite. */
+  #stage { --fsc: min(var(--fs), 1.3); --cardsw: min(calc(300px * var(--fsc)), 24%); }
   #stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; }
   #orb { width: min(62vh, 580px); height: min(62vh, 580px); margin: -50px 0 -40px; cursor: pointer; filter: drop-shadow(0 0 35px rgba(var(--a1),.25)); }
   #status {
@@ -82,8 +85,8 @@
   #status b { color: var(--cyan); font-weight: 600; text-shadow: 0 0 14px rgba(var(--a1),.9); }
   #hint { position: absolute; bottom: 22px; font-size: calc(11px * var(--fs)); color: var(--dim); font-family: var(--font-mono); letter-spacing: .2em; }
   #transcript {
-    position: absolute; top: 54px; left: 50%; transform: translateX(-50%);
-    max-width: 68%; text-align: center; font-size: calc(15px * var(--fs)); font-weight: 500;
+    position: absolute; top: 54px; left: calc(34px + var(--cardsw) + 24px); right: calc(34px + var(--cardsw) + 24px);
+    text-align: center; font-size: calc(15px * var(--fs)); font-weight: 500;
     color: var(--text2); min-height: 22px; text-shadow: 0 0 18px rgba(var(--a1),.35);
   }
 
@@ -99,7 +102,7 @@
 
   /* ------------------------------------------------ display cards (HUD holograms) */
   #cards {
-    position: absolute; top: 96px; left: 34px; bottom: 30px; width: min(calc(330px * var(--fs)), 40vw);
+    position: absolute; top: 96px; left: 34px; bottom: 30px; width: var(--cardsw);
     display: flex; flex-direction: column; gap: 14px; overflow-y: auto;
     pointer-events: none; scrollbar-width: none; z-index: 4;
   }
@@ -120,24 +123,30 @@
   .card.warning { border-left-color: var(--amber); }
   .card.result { border-left-color: var(--ok); }
   .card h3 {
-    font-size: calc(12px * var(--fs)); letter-spacing: .3em; text-transform: uppercase; font-weight: 700;
+    font-size: calc(12px * var(--fsc)); letter-spacing: .3em; text-transform: uppercase; font-weight: 700;
     color: var(--cyan); margin-bottom: 8px; font-family: var(--font-mono);
     display: flex; justify-content: space-between; align-items: baseline;
   }
+  .card h3 > span:first-child { cursor: pointer; }
+  .card h3 > span:first-child::before { content: "▾ "; color: var(--dim); }
+  .card.repliee h3 > span:first-child::before { content: "▸ "; }
+  .card.repliee { padding-top: 8px; padding-bottom: 8px; animation: none; }
+  .card.repliee h3 { margin-bottom: 0; }
+  .card.repliee .body, .card.repliee .clip { display: none; }
   .card.warning h3 { color: var(--amber); } .card.result h3 { color: var(--ok); }
-  .card h3 .x { cursor: pointer; color: var(--dim); font-size: calc(13px * var(--fs)); letter-spacing: 0; }
+  .card h3 .x { cursor: pointer; color: var(--dim); font-size: calc(13px * var(--fsc)); letter-spacing: 0; }
   .card h3 .x:hover { color: var(--err); }
-  .card .body { font-size: calc(14px * var(--fs)); line-height: 1.5; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+  .card .body { font-size: calc(14px * var(--fsc)); line-height: 1.5; color: var(--text); white-space: pre-wrap; word-break: break-word; }
   .card .body code {
-    font-family: var(--font-mono); font-size: calc(12.5px * var(--fs)); color: var(--amber);
+    font-family: var(--font-mono); font-size: calc(12.5px * var(--fsc)); color: var(--amber);
     background: rgba(var(--a2),.08); padding: 1px 5px; border-radius: 2px;
   }
   .card .body ul { margin: 4px 0 0 16px; }
-  .card.code .body { font-family: var(--font-mono); font-size: calc(12px * var(--fs)); color: var(--text2); }
+  .card.code .body { font-family: var(--font-mono); font-size: calc(12px * var(--fsc)); color: var(--text2); }
   .card .body pre { white-space: pre-wrap; margin: 4px 0; }
   .clip { display: flex; gap: 6px; margin: 2px 0 8px; white-space: normal; }
   .clip button {
-    cursor: pointer; padding: 2px 8px; font-family: var(--font-mono); font-size: calc(11px * var(--fs));
+    cursor: pointer; padding: 2px 8px; font-family: var(--font-mono); font-size: calc(11px * var(--fsc));
     background: rgba(var(--deep),.6); color: var(--dim); border: 1px solid var(--line);
   }
   .clip button:hover:not(:disabled) { color: var(--cyan); border-color: var(--cyan); }
@@ -950,11 +959,29 @@ function addCard(title, content, kind) {
   el.innerHTML = `<h3><span>${esc(title)}</span><span class="x" title="fermer">✕</span></h3>
     <div class="body">${mdRender(content)}</div>`;
   el.querySelector(".x").addEventListener("click", () => el.remove());
+  // un clic sur le titre replie ou rouvre ; rouverte à la main, elle ne se replie plus seule
+  el.querySelector("h3 > span").addEventListener("click", () => {
+    el.dataset.epinglee = el.classList.contains("repliee") ? "1" : "";
+    el.classList.toggle("repliee");
+  });
+  el.dataset.nee = Date.now();
   addClipButtons(el, kind);
   cardsEl.prepend(el);
   // keep at most 6 cards
   while (cardsEl.children.length > 6) cardsEl.lastChild.remove();
 }
+
+// Repli automatique : 20 s après son apparition, une fiche se réduit à son titre.
+// La plus récente reste dépliée tant que VICTOR réfléchit ou parle (il la commente).
+const REPLI_MS = 20000;
+setInterval(() => {
+  const occupe = orbMode === "speaking" || orbMode === "thinking";
+  [...cardsEl.querySelectorAll(".card:not(.repliee)")].forEach((el, i) => {
+    if (el.dataset.epinglee || Date.now() - Number(el.dataset.nee) < REPLI_MS) return;
+    if (occupe && el === cardsEl.firstElementChild) return;
+    el.classList.add("repliee");
+  });
+}, 1000);
 
 /* ---------------------------------------------------------- report dashboard */
 // Series palette validated for dark surfaces (CVD-safe, dataviz checks pass).
