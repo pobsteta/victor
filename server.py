@@ -231,7 +231,11 @@ quelques minutes à plus d'une heure : demande à Claude Code de le LANCER EN
 TÂCHE DE FOND (outil lancer_calcul) et de rendre la main aussitôt ; dis à
 l'utilisateur que tu le préviendras à la fin, et qu'il peut demander « où en
 est le calcul » d'ici là (outil etat_calcul). N'attends jamais la fin d'un
-calcul : un message [SYSTÈME] « Calcul Néméton » te l'apprendra. Pour un résultat de
+calcul : un message [SYSTÈME] « Calcul Néméton » te l'apprendra. Le rapport
+PDF (generer_rapport) et le croisement ONF confirmé partent aussi en tâche de
+fond : dis « c'est lancé, je vous préviendrai », un message [SYSTÈME]
+« Tâche de fond Néméton » annoncera la fin. Un seul travail à la fois par
+projet : si Néméton répond calcul_en_cours, dis-le. Pour un résultat de
 diagnostic, demande à Claude Code de terminer par le bloc JSON du rapport
 (title, kpis, chart, markdown), puis appelle display_report avec. Si
 Claude Code répond que plusieurs projets correspondent, lis les candidats et
@@ -343,8 +347,9 @@ propose de la lancer. Annonce l'avancement à chaque étape.
 - S5 : action enregistrer_app (Playwright filme l'application), puis délègue
   dans l'espace nemeton, avec etape 5, UN outil MCP par délégation et dans cet
   ordre : action_production lancer_calcul ; puis, seulement après le message
-  [SYSTÈME] de fin de calcul, generer_rapport ; puis exporter_gpkg. Le suivi
-  du calcul, toutes les cinq secondes, et les captures 07 sont automatiques :
+  [SYSTÈME] de fin de calcul, generer_rapport ; puis, après le message de fin
+  du rapport, exporter_gpkg. Le suivi du calcul et du rapport, toutes les cinq
+  secondes, et les captures 07 sont automatiques :
   n'interroge pas etat_calcul. Enfin action arreter_enregistrement.
 - S6 : action visuels, etape 6.
 - S7 : action resume (liste des rushes pour le montage), puis assembler. Si
@@ -1102,8 +1107,43 @@ def _statut_job(job: dict) -> tuple[str, str | None]:
     return statut, erreur
 
 
+# Depuis la mission 012 de nemetonshiny, compute_job.json suit aussi le rapport
+# PDF et le croisement ONF lancés en tâche de fond (champ type, défaut calcul).
+NOMS_JOB = {"calcul": "le calcul", "rapport": "le rapport PDF", "onf": "le croisement ONF"}
+
+
+def type_job(job: dict) -> str:
+    t = job.get("type") if isinstance(job, dict) else None
+    return t if t in NOMS_JOB else "calcul"
+
+
+def _nombre(v) -> int | None:
+    if isinstance(v, list) and len(v) == 1:
+        v = v[0]
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def _resultat_onf(res) -> str:
+    """Bilan d'un croisement ONF pour la voix, depuis le résultat du job."""
+    res = res if isinstance(res, dict) else {}
+    morceaux = []
+    if _nombre(res.get("n_ugf")) is not None:
+        morceaux.append(f"{_nombre(res['n_ugf'])} unités de gestion")
+    if _nombre(res.get("n_parcelles")) is not None:
+        morceaux.append(f"{_nombre(res['n_parcelles'])} parcelles")
+    ecartees = res.get("ecartees")
+    n_ec = len(ecartees) if isinstance(ecartees, list) else (
+        len(next(iter(ecartees.values()), [])) if isinstance(ecartees, dict) and ecartees else 0)
+    morceaux.append(f"{n_ec} parcelles écartées du projet")
+    texte = "Résultat : " + ", ".join(morceaux) + ". "
+    perimes = res.get("indicateurs_perimes")
+    if perimes is True or perimes == [True]:
+        texte += "Les indicateurs sont désormais périmés : propose de relancer le calcul. "
+    return texte
+
+
 def scan_calculs(racine: Path = NEMETON_PROJETS) -> dict[str, dict]:
-    """projet -> {job_id, statut, fin_a, erreur}."""
+    """projet -> {job_id, statut, type, resultat, fin_a, erreur}."""
     etats = {}
     for f in racine.glob("*/data/compute_job.json"):
         job = _lire_json(f)
@@ -1111,6 +1151,7 @@ def scan_calculs(racine: Path = NEMETON_PROJETS) -> dict[str, dict]:
             continue
         statut, erreur = _statut_job(job)
         etats[f.parent.parent.name] = {"job_id": job.get("job_id"), "statut": statut,
+                                       "type": type_job(job), "resultat": job.get("resultat"),
                                        "fin_a": job.get("fin_a"), "erreur": erreur}
     return etats
 
@@ -1119,6 +1160,19 @@ def message_calcul(projet: str, etat: dict, racine: Path = NEMETON_PROJETS) -> s
     meta = _lire_json(racine / projet / "metadata.json") or {}
     nom = _texte_court(meta.get("name")) or projet
     statut = etat["statut"]
+    genre = etat.get("type") or "calcul"
+    if genre != "calcul":
+        quoi = NOMS_JOB[genre]
+        tete = f"[SYSTÈME] Tâche de fond Néméton : {quoi} du projet « {nom} » ({projet})"
+        if statut == "annule":
+            return f"{tete} est annulé. Dis-le en une phrase."
+        if statut == "echec":
+            return (f"{tete} a échoué ({_texte_court(etat.get('erreur'), 160) or 'erreur inconnue'}). "
+                    "Dis-le en une phrase et propose de déléguer la lecture du journal dans l'espace nemeton.")
+        if genre == "rapport":
+            return (f"{tete} est prêt, dans le dossier exports du projet. Annonce-le en une phrase, "
+                    "sans lire de chemin de fichier.")
+        return f"{tete} est terminé. Annonce-le en une phrase. " + _resultat_onf(etat.get("resultat"))
     if statut == "annule":
         return (f"[SYSTÈME] Calcul Néméton : le calcul du projet « {nom} » ({projet}) est annulé. "
                 "Dis-le en une phrase.")
@@ -1233,7 +1287,7 @@ def lire_etat(projet_id: str, racine: Path = NEMETON_PROJETS) -> dict:
     statut, erreur = _statut_job(job)
     prog = _lire_json(data / "progress_state.json")
     prog = prog if isinstance(prog, dict) else {}
-    etat = {"statut": statut, "lance_a": job.get("lance_a"), "fin_a": job.get("fin_a"),
+    etat = {"statut": statut, "type": type_job(job), "lance_a": job.get("lance_a"), "fin_a": job.get("fin_a"),
             "indicateurs_faits": prog.get("indicators_completed"),
             "indicateurs_total": prog.get("indicators_total"),
             "tache": _texte_court(prog.get("current_task"))}
@@ -1317,10 +1371,10 @@ async def surveiller_calculs():
             if precedent is not None:
                 for projet in calculs_a_annoncer(precedent, etats):
                     msg = await asyncio.to_thread(message_calcul, projet, etats[projet])
-                    print(f"[néméton] calcul {projet} : {etats[projet]['statut']}", flush=True)
+                    print(f"[néméton] {etats[projet]['type']} {projet} : {etats[projet]['statut']}", flush=True)
                     if projet not in PROD_SUIVIS:  # sinon la production l'annonce déjà
                         annoncer(msg)
-                    if etats[projet]["statut"] == "termine":
+                    if etats[projet]["statut"] == "termine" and etats[projet]["type"] == "calcul":
                         asyncio.create_task(rafraichir_fiche(projet))
             precedent = etats
         except Exception as exc:  # la surveillance ne doit jamais tomber
@@ -1377,7 +1431,7 @@ PROD_CONSIGNE = (
     "dernière ligne exactement « PRODUCTION: OK <détail court, par exemple le fichier produit> » "
     "si l'outil a réussi, ou « PRODUCTION: ERREUR <raison> » sinon.")
 # Capture demandée à Playwright quand une action MCP de l'étape 5 réussit.
-PROD_CAPTURES = {"lancer_calcul": "07-02-calcul-lance", "generer_rapport": "07-04-rapport",
+PROD_CAPTURES = {"lancer_calcul": "07-02-calcul-lance",
                  "exporter_gpkg": "07-05-export"}
 
 
@@ -1547,9 +1601,10 @@ def prod_capture(nom: str) -> dict:
     return {"ok": True, "demandee": f"{nom}.png"}
 
 
-async def prod_suivre_calcul(projet: str, depuis: str):
+async def prod_suivre_calcul(projet: str, depuis: str, genre: str = "calcul"):
     """Sonde etat_calcul toutes les 5 s (lecture directe de compute_job.json),
-    10 min au plus. Journalise ATTENTE à chaque progrès, OK ou ERREUR à la fin."""
+    10 min au plus. Journalise ATTENTE à chaque progrès, OK ou ERREUR à la fin.
+    genre : calcul ou rapport (generer_rapport est détaché depuis la mission 012)."""
     PROD_SUIVIS.add(projet)
     try:
         fin = time.monotonic() + PROD_CALCUL_TIMEOUT
@@ -1557,7 +1612,15 @@ async def prod_suivre_calcul(projet: str, depuis: str):
         while True:
             etat = await asyncio.to_thread(lire_etat, projet)
             statut = etat.get("statut")
-            ancien = str(etat.get("lance_a") or "") < depuis    # job d'avant notre lancement
+            # job d'avant notre lancement, ou d'un autre type
+            ancien = str(etat.get("lance_a") or "") < depuis or etat.get("type", "calcul") != genre
+            if statut == "termine" and not ancien and genre == "rapport":
+                prod_ok(5, "etat_calcul", f"rapport termine projet={projet}",
+                        "le rapport PDF du projet de démo est prêt. Annonce-le en une phrase, puis "
+                        "délègue exporter_gpkg (etape 5, action_production exporter_gpkg).")
+                if "enregistrement" in PROD_PROCS:
+                    prod_capture("07-04-rapport")
+                return
             if statut == "termine" and not ancien:
                 faits = etat.get("indicateurs_total") or etat.get("indicateurs_faits")
                 prod_ok(5, "etat_calcul", f"termine projet={projet}"
@@ -1568,7 +1631,7 @@ async def prod_suivre_calcul(projet: str, depuis: str):
                     prod_capture("07-03-calcul-termine")
                 return
             if statut in ("echec", "annule") and not ancien:
-                prod_arret(5, "etat_calcul", f"{statut} : {etat.get('erreur') or 'sans message'}")
+                prod_arret(5, "etat_calcul", f"{genre} {statut} : {etat.get('erreur') or 'sans message'}")
                 return
             resume = f"{'attente du lancement' if ancien or statut == 'aucun' else statut}" \
                      + (f" {etat['indicateurs_faits']}/{etat['indicateurs_total']}"
@@ -1577,7 +1640,7 @@ async def prod_suivre_calcul(projet: str, depuis: str):
                 prod.journaliser(5, "etat_calcul", "ATTENTE", resume)
                 dernier = resume
             if time.monotonic() > fin:
-                prod_arret(5, "etat_calcul", f"délai de {PROD_CALCUL_TIMEOUT // 60} min dépassé, le calcul "
+                prod_arret(5, "etat_calcul", f"délai de {PROD_CALCUL_TIMEOUT // 60} min dépassé, le {genre} "
                            "continue en fond (annuler_calcul possible)")
                 return
             await asyncio.sleep(PROD_SONDE)
@@ -1592,11 +1655,12 @@ def prod_avant_delegation(args: dict) -> dict | None:
     if etat["arretee"]:
         return {"ok": False, "arretee": True,
                 "error": f"production arrêtée ({etat['erreur']}) : attendre « reprendre »"}
-    if (args.get("action_production") or "") == "lancer_calcul":
-        en_cours = [p for p, e in scan_calculs().items() if e["statut"] in ("lancement", "en_cours")]
+    if (args.get("action_production") or "") in ("lancer_calcul", "generer_rapport"):
+        en_cours = [f"{NOMS_JOB[e['type']]} de {p}" for p, e in scan_calculs().items()
+                    if e["statut"] in ("lancement", "en_cours")]
         if en_cours:
-            return {"ok": False, "error": (f"un calcul tourne déjà ({', '.join(en_cours)}) : jamais deux "
-                                           "calculs simultanés ; annuler_calcul est disponible")}
+            return {"ok": False, "error": (f"une tâche de fond tourne déjà ({', '.join(en_cours)}) : jamais "
+                                           "deux à la fois ; annuler_calcul est disponible")}
     return None
 
 
@@ -1618,12 +1682,13 @@ def prod_fin_tache(task: dict) -> str:
     prod_ok(etape, action, f"projet={projet} {prod._champ(verdicts[-1][1], 120)}".strip())
     if action in PROD_CAPTURES and "enregistrement" in PROD_PROCS:
         prod_capture(PROD_CAPTURES[action])
-    if action == "lancer_calcul":
+    if action in ("lancer_calcul", "generer_rapport"):
         if projet == "?":
             prod_arret(etape, "etat_calcul", "projet de démo inconnu : refaire S0 (demarrer)", annonce=False)
             return "PRODUCTION ARRÊTÉE : projet de démo inconnu. Dis-le en une phrase."
-        prod_fond(prod_suivre_calcul(projet, p["depuis"]))
-        return ("Production : calcul lancé et journalisé. Dis en une phrase que tu suis le calcul "
+        genre = "calcul" if action == "lancer_calcul" else "rapport"
+        prod_fond(prod_suivre_calcul(projet, p["depuis"], genre))
+        return (f"Production : {genre} lancé et journalisé. Dis en une phrase que tu le suis "
                 "et que tu annonceras sa fin ; n'interroge pas etat_calcul.")
     return "Production : étape journalisée. Annonce-la en une phrase et propose la suite du déroulé."
 

@@ -268,7 +268,10 @@ VICTOR sait piloter les diagnostics forestiers :
   annonce la fin (ou l'échec) du calcul : il surveille le fichier
   `data/compute_job.json` des projets (dossier `NEMETON_PROJETS`, par défaut
   `~/.local/share/nemeton/projects`). Si aucune page n'est ouverte, l'annonce
-  attend la prochaine connexion. Une vue publiée avant le calcul est signalée
+  attend la prochaine connexion. Le rapport PDF et le croisement ONF tournent
+  aussi en tâche de fond (même fichier, champ `type`) : VICTOR annonce « le
+  rapport est prêt » ou le bilan du croisement (unités, parcelles écartées,
+  indicateurs à recalculer). Une vue publiée avant le calcul est signalée
   comme ancienne : une tâche ne peut pas la republier. Exception : avec
   `VICTOR_NEMETON_DISTANT=1`, l'Atlas est annoncé à jour, car il se redessine
   à l'ouverture en interrogeant le connecteur distant claude.ai « nemeton »
