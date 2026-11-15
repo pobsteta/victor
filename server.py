@@ -257,7 +257,8 @@ ne reconnaît que le nom exact ou l'identifiant : si elle répond
 deleguer = vrai (nom mal entendu, partiel ou approché), délègue dans l'espace
 nemeton (« appelle resume_projet du projet X », ou etat_calcul), sans
 réessayer d'autres orthographes : le serveur Néméton sait rapprocher les noms
-mal dictés. S'il répond projet_ambigu, lis les candidats (nom et identifiant)
+mal dictés. S'il répond projet_ambigu, lis les candidats (nom et identifiant
+sous sa forme à dire, voir plus bas)
 et demande lequel, sans jamais choisir ; projet_introuvable : dis-le.
 Après le texte de la fiche, termine TOUJOURS par une question courte qui
 propose l'Atlas : si atlas_url est présent, « Voulez-vous que j'ouvre l'Atlas
@@ -309,6 +310,11 @@ exemple « prépare l'aperçu de croiser_onf du projet Couchey » : ne décris
 JAMAIS le bloc de confirmation, son format ou ses clés (l'espace nemeton les
 connaît), et ne demande pas de task_id. Si
 le message [SYSTÈME] du résultat dit qu'une confirmation est attendue :
+Un identifiant de projet (ex. 20261008_212542_uywc) ne se lit JAMAIS tel
+quel : dis la date de création tirée de ses huit premiers chiffres puis ses
+quatre dernières lettres épelées, « créé le huit octobre, identifiant se
+terminant par u y w c » (l'année seulement si ce n'est pas l'année en cours).
+Quand un message te donne la forme « à dire », reprends-la mot pour mot.
 1. lis l'aperçu en une ou deux phrases, en nommant le projet par son nom ET
    son identifiant, puis ce que l'écriture change (unités remplacées et
    nouvelles ; pour le croisement ONF, combien de parcelles QUITTENT le
@@ -1237,6 +1243,23 @@ def _norm(v: str) -> str:
     v = unicodedata.normalize("NFKD", v or "")
     v = "".join(c for c in v if not unicodedata.combining(c)).lower()
     return " ".join(re.sub(r"[^a-z0-9]+", " ", v).split())
+
+
+MOIS = ("janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août",
+        "septembre", "octobre", "novembre", "décembre")
+
+
+def id_a_dire(projet_id: str, annee_courante: int | None = None) -> str | None:
+    """Identifiant de projet sous une forme qui se dit (décision de Pascal,
+    2026-11-15) : « créé le 8 octobre, identifiant se terminant par u y w c ».
+    La synthèse vocale massacre « 20261008_212542_uywc » lu tel quel."""
+    m = re.fullmatch(r"(\d{4})(\d{2})(\d{2})_\d{6}_([a-z0-9]{4})", (projet_id or "").strip())
+    if not m or not 1 <= int(m.group(2)) <= 12:
+        return None
+    annee, mois, jour, fin = int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4)
+    annee_courante = annee_courante or time.localtime().tm_year
+    date = f"{'premier' if jour == 1 else jour} {MOIS[mois - 1]}" + (f" {annee}" if annee != annee_courante else "")
+    return f"créé le {date}, identifiant se terminant par {' '.join(fin)}"
 
 
 def resoudre_projet(projet: str, racine: Path = NEMETON_PROJETS, approche: bool = False) -> dict:
@@ -2727,10 +2750,12 @@ class Session:
         vue = extraire_vue(task["output"] or "") if task["espace"] == "nemeton" else None
         attente = task.get("confirmation")
         if attente:
+            dire = id_a_dire(attente["projet"])
             consigne = (f"Une confirmation est attendue (task_id {task_id}) : écriture {attente['outil']} "
-                        f"sur le projet « {attente['projet_nom']} », identifiant {attente['projet']}, "
+                        f"sur le projet « {attente['projet_nom']} », identifiant {attente['projet']}"
+                        + (f" (à dire : « {dire} »)" if dire else "") + ", "
                         f"valable jusqu'à {attente['expire_a']} (UTC). Lis l'aperçu ci-dessus en une ou deux "
-                        "phrases avec le nom ET l'identifiant du projet, signale si le nom entendu diffère, "
+                        "phrases avec le nom ET l'identifiant du projet sous sa forme à dire, signale si le nom entendu diffère, "
                         "puis demande « Je confirme ? ». Appelle confirmer_ecriture avec ce task_id seulement "
                         "après un oui explicite ; sur un non, avec abandonner = vrai.")
         elif vue:
