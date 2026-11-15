@@ -26,6 +26,7 @@ Routes :
 import asyncio
 import base64
 import collections
+import concurrent.futures
 import contextlib
 import json
 import os
@@ -39,6 +40,7 @@ import time
 import unicodedata
 import uuid
 from array import array
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -66,6 +68,8 @@ def load_env():
 load_env()
 
 import production as prod  # noqa: E402 - lit VICTOR_KIT_VIDEO, donc après load_env()
+import confirmation as conf  # noqa: E402
+import journal_dictees as jd  # noqa: E402 - lit VICTOR_JOURNAL_DICTEES
 
 
 def env_float(name, default):
@@ -160,6 +164,8 @@ TOUT CE QUE TU ÉCRIS EST LU À VOIX HAUTE par une synthèse vocale :
 - écris les nombres et unités comme on les dit ("douze pour cent").
 Ce que l'utilisateur dit t'arrive par transcription automatique : s'il y a un
 mot bizarre, devine le sens le plus probable plutôt que de faire répéter.
+Exception : pour une ÉCRITURE (modifier un projet, une base de données), ne
+devine jamais ; fais préciser.
 
 Quand tu appelles un outil, dis d'abord une très courte phrase ("Je m'en
 occupe, {TITLE}.") pour que l'utilisateur n'attende pas en silence.
@@ -240,8 +246,13 @@ une ou deux phrases. Si a_jour est faux, précise que les résultats ont changé
 depuis et propose de rafraîchir la fiche. Si la fiche est absente ou à
 rafraîchir, délègue dans l'espace nemeton (« appelle fiche_projet du projet X
 avec actualiser = true »), puis rappelle nemeton_fiche. Pour « où en est le
-calcul de X », appelle nemeton_etat plutôt que de déléguer. Si plusieurs
-projets correspondent, lis les candidats et demande lequel.
+calcul de X », appelle nemeton_etat plutôt que de déléguer. La voie rapide
+ne reconnaît que le nom exact ou l'identifiant : si elle répond
+deleguer = vrai (nom mal entendu, partiel ou approché), délègue dans l'espace
+nemeton (« appelle resume_projet du projet X », ou etat_calcul), sans
+réessayer d'autres orthographes : le serveur Néméton sait rapprocher les noms
+mal dictés. S'il répond projet_ambigu, lis les candidats (nom et identifiant)
+et demande lequel, sans jamais choisir ; projet_introuvable : dis-le.
 Après le texte de la fiche, termine TOUJOURS par une question courte qui
 propose l'Atlas : si atlas_url est présent, « Voulez-vous que j'ouvre l'Atlas
 de X ? » ; s'il répond oui, appelle directement open_url avec atlas_url, sans
@@ -281,7 +292,31 @@ onglet du navigateur.
 Après open_nemeton, ne dis JAMAIS que c'est ouvert ou prêt : dis que
 l'application se charge et qu'il faut patienter un instant. Un message
 [SYSTÈME] « Néméton » t'apprendra quand la page est entièrement affichée :
-annonce alors, en une phrase, que l'utilisateur peut reprendre la main."""
+annonce alors, en une phrase, que l'utilisateur peut reprendre la main.
+
+ÉCRITURES NÉMÉTON (appliquer les unités de gestion, croiser avec l'ONF, et
+toute autre écriture dans un projet) : elles demandent TOUJOURS une
+confirmation orale. Délègue la demande dans l'espace nemeton normalement. Si
+le message [SYSTÈME] du résultat dit qu'une confirmation est attendue :
+1. lis l'aperçu en une ou deux phrases, en nommant le projet par son nom ET
+   son identifiant, puis ce que l'écriture change (unités remplacées et
+   nouvelles ; pour le croisement ONF, combien de parcelles QUITTENT le
+   projet), et termine par « Je confirme ? » ;
+2. si le nom entendu diffère du projet_nom retenu par le serveur, dis-le
+   explicitement avant de demander ;
+3. n'appelle confirmer_ecriture avec le task_id de cette tâche qu'après un
+   « oui », « confirme » ou « vas-y » explicite. Silence, bruit, hésitation,
+   phrase ambiguë ou changement de sujet ne valent PAS confirmation : ne
+   relance pas. Sur un « non », appelle confirmer_ecriture avec
+   abandonner = vrai ;
+4. ne délègue jamais toi-même la confirmation, et ne mentionne jamais de jeton
+   (tu n'en vois aucun) ;
+5. si confirmer_ecriture répond expire ou si la tâche répond jeton_invalide,
+   dis-le et propose de redemander un aperçu ;
+6. décide sur le code (confirmation_requise, jeton_invalide, projet_ambigu,
+   projet_introuvable), jamais sur la phrase action. projet_ambigu : lis les
+   candidats et demande lequel, sans choisir.
+La phrase d'attente ne remplace pas l'aperçu : lis-le en entier avant tout."""
 
 if PRODUCTION:
     INSTRUCTIONS += f"""
@@ -525,20 +560,32 @@ if NEMETON:
                         "without Claude Code. Shows the dashboard on screen by itself and returns "
                         "texte, a one-sentence summary to say."),
         "input_schema": {"type": "object", "properties": {
-            "projet": {"type": "string", "description": "Project name as the user says it, or its id"},
+            "projet": {"type": "string", "description": ("Project id, or its exact name; any other "
+                                                         "name returns deleguer = true")},
         }, "required": ["projet"]},
     }, {
         "name": "nemeton_etat",
         "description": ("Instant state of a Nemeton project's computation (status, indicators done, "
                         "current task, duration), read from disk without Claude Code."),
         "input_schema": {"type": "object", "properties": {
-            "projet": {"type": "string", "description": "Project name as the user says it, or its id"},
+            "projet": {"type": "string", "description": ("Project id, or its exact name; any other "
+                                                         "name returns deleguer = true")},
         }, "required": ["projet"]},
+    }, {
+        "name": "confirmer_ecriture",
+        "description": ("Confirm (or abandon) a Nemeton write that is waiting for the user's "
+                        "spoken confirmation. Call ONLY after an explicit yes from the user, with "
+                        "the task_id of the task that returned the preview; with abandonner = true "
+                        "on a no. VICTOR then launches the write itself."),
+        "input_schema": {"type": "object", "properties": {
+            "task_id": {"type": "string", "description": "Id of the task that returned the preview"},
+            "abandonner": {"type": "boolean", "description": "true when the user said no"},
+        }, "required": ["task_id"]},
     }]
 TOOLS[-1]["cache_control"] = {"type": "ephemeral"}
 SYSTEM = [{"type": "text", "text": INSTRUCTIONS, "cache_control": {"type": "ephemeral"}}]
 # Outils qui font attendre : sans phrase d'attente du modèle, VICTOR dit ACCUSE.
-OUTILS_LENTS = {"delegate_to_claude", "open_project_app", "open_nemeton"}
+OUTILS_LENTS = {"delegate_to_claude", "open_project_app", "open_nemeton", "confirmer_ecriture"}
 ACCUSE = f"Je m'en occupe, {TITLE}."
 
 @contextlib.asynccontextmanager
@@ -594,6 +641,17 @@ app.add_middleware(LocalOnlyMiddleware)
 
 TASKS: dict = {}
 PROCS: dict = {}  # task_id -> Popen, gardé hors de TASKS pour que get_task reste JSON
+# Blocs NEMETON_CONFIRMATION (jeton d'écriture) par task_id de la tâche 1 :
+# jamais dans TASKS (envoyé à la page), jamais au modèle vocal.
+CONFIRMATIONS = conf.Attentes()
+# Journal des dictées : un seul fil d'écriture, pour garder l'ordre sans
+# jamais faire attendre un tour.
+_JOURNAL = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="journal")
+
+
+def journaliser_dictee(evt: dict):
+    evt.setdefault("t", datetime.now(jd.PARIS).isoformat(timespec="seconds"))
+    _JOURNAL.submit(jd.ecrire, evt)
 
 
 def _kill_tree(proc):
@@ -635,8 +693,15 @@ def _run_task(task_id: str, prompt: str, cwd: str):
             if task["status"] != "cancelled":  # posé par cancel_task : ne pas écraser
                 out = (stdout or "").strip()
                 err = (stderr or "").strip()
+                out = out if out else err[:2000]
+                # Le jeton d'écriture est retiré AVANT que la sortie soit visible :
+                # watch_task envoie task à la page dès que le statut change.
+                out, bloc, brut = conf.extraire(out)
+                if bloc and task["espace"] == "nemeton" and proc.returncode == 0:
+                    CONFIRMATIONS.garder(task_id, bloc, brut)
+                    task["confirmation"] = conf.resume_pour_voix(bloc)
+                task["output"] = out
                 task["status"] = "done" if proc.returncode == 0 else "error"
-                task["output"] = out if out else err[:2000]
     except FileNotFoundError:
         task["status"] = "error"
         task["output"] = ("La commande 'claude' est introuvable. Installe Claude Code : "
@@ -649,18 +714,45 @@ def _run_task(task_id: str, prompt: str, cwd: str):
     task["ended"] = time.time()
 
 
-def start_task(title: str, prompt: str, espace: str | None = None) -> dict:
+def start_task(title: str, prompt: str, espace: str | None = None, affiche: str | None = None) -> dict:
+    """Lance claude -p. affiche : prompt montré à la page à la place du vrai
+    (tâche 2 d'une confirmation : le jeton ne doit pas sortir)."""
     espace = (espace or "").strip().lower()
     if espace not in ESPACES:
         espace = ESPACE_DEFAUT
     task_id = uuid.uuid4().hex[:8]
     TASKS[task_id] = {
-        "id": task_id, "title": title, "prompt": prompt, "espace": espace,
+        "id": task_id, "title": title, "prompt": affiche if affiche is not None else prompt, "espace": espace,
         "status": "running", "output": "", "started": time.time(), "ended": None,
     }
     threading.Thread(target=_run_task, args=(task_id, prompt, ESPACES[espace]["path"]),
                      daemon=True).start()
     return TASKS[task_id]
+
+
+def confirmer_ecriture(task_id: str, abandonner: bool = False) -> dict:
+    """Lance la tâche 2 d'une écriture Néméton après le « oui » de l'utilisateur.
+
+    Le bloc gardé pour la tâche 1 est consommé dans tous les cas (oui, non,
+    expiré) : un jeton ne sert qu'une fois. Le prompt est construit ici, sur le
+    gabarit unique ; le modèle vocal ne voit jamais le jeton."""
+    task_id = (task_id or "").strip()
+    pris = CONFIRMATIONS.prendre(task_id)
+    if not pris:
+        attente = CONFIRMATIONS.en_attente()
+        return {"ok": False, "code": "aucune_confirmation",
+                "erreur": f"aucune écriture en attente de confirmation pour la tâche « {task_id} »",
+                **({"en_attente": attente} if attente else {})}
+    bloc, brut = pris
+    quoi = {"outil": bloc["outil"], "projet": bloc["projet"], "projet_nom": bloc["projet_nom"]}
+    if abandonner:
+        return {"ok": True, "abandonne": True, **quoi}
+    if conf.expire(bloc):
+        return {"ok": False, "code": "expire", **quoi,
+                "erreur": "la confirmation a expiré : il faut redemander un aperçu"}
+    task = start_task(f"Écriture confirmée : {bloc['outil']} sur {bloc['projet_nom']}",
+                      conf.prompt_tache2(brut), "nemeton", affiche=conf.prompt_affiche(bloc))
+    return {"ok": True, "status": "started", "task_id": task["id"], **quoi}
 
 
 def cancel_task(task_id: str = "latest") -> dict:
@@ -954,6 +1046,12 @@ def extraire_vue(texte: str) -> dict | None:
 NEMETON_PROJETS = Path(os.path.expanduser(
     os.environ.get("NEMETON_PROJETS", "~/.local/share/nemeton/projects")))
 CALCUL_FINS = {"termine", "echec", "annule"}
+# Connecteur distant « nemeton » de claude.ai joignable (nemetonmcp
+# serveur_mcp_distant) : une vue Atlas ouverte dans Chrome appelle vue_atlas et
+# se redessine si les résultats sont plus récents. Réglage explicite, posé par
+# Pascal une fois le connecteur servi durablement (brief 2026-10-12).
+NEMETON_DISTANT = os.environ.get("VICTOR_NEMETON_DISTANT", "").strip().lower() in ("1", "true", "oui", "on")
+VUES_RAFRAICHIES = {"atlas"}
 CALCUL_PERIODE = 15
 
 
@@ -1033,17 +1131,19 @@ def message_calcul(projet: str, etat: dict, racine: Path = NEMETON_PROJETS) -> s
     vues = _lire_json(Path(ESPACES["nemeton"]["path"]) / "data" / "vues.json") if NEMETON else None
     entree = vues.get(projet) if isinstance(vues, dict) else None
     fin = str(etat.get("fin_a") or "~")
-    vues_projet = [(VUE_TYPES.get(t, t), str(v.get("maj") or "") >= fin) for t, v in (entree or {}).items()
-                   if isinstance(v, dict) and v.get("url")]
+    # Avec le connecteur distant, l'Atlas se redessine à l'ouverture : il est à jour.
+    vues_projet = [(VUE_TYPES.get(t, t), str(v.get("maj") or "") >= fin
+                    or (NEMETON_DISTANT and t in VUES_RAFRAICHIES))
+                   for t, v in (entree or {}).items() if isinstance(v, dict) and v.get("url")]
     anciennes = [n for n, a_jour in vues_projet if not a_jour]
     a_jour = [n for n, ok in vues_projet if ok]
     if anciennes:
         msg += (f"Vues publiées avant ce calcul, qui montrent les anciens résultats : {', '.join(anciennes)}. "
                 "Une tâche ne peut pas les republier : propose d'ouvrir l'application Néméton, "
-                "ou de mettre à jour la vue depuis une session Claude Code interactive.")
-    elif a_jour:
+                "ou de mettre à jour la vue depuis une session Claude Code interactive. ")
+    if a_jour:
         msg += f"Vues à jour : {', '.join(a_jour)}. Propose de les ouvrir."
-    else:
+    elif not anciennes:
         msg += "Propose d'ouvrir l'application Néméton pour voir les résultats."
     return msg
 
@@ -1078,9 +1178,15 @@ def _norm(v: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9]+", " ", v).split())
 
 
-def resoudre_projet(projet: str, racine: Path = NEMETON_PROJETS) -> dict:
-    """Projet par identifiant ou nom approché : {id, nom}, ou {erreur, candidats}
-    s'il y en a plusieurs. Jamais de choix silencieux."""
+def resoudre_projet(projet: str, racine: Path = NEMETON_PROJETS, approche: bool = False) -> dict:
+    """Projet par identifiant ou nom EXACT après normalisation : {id, nom}, ou
+    {erreur, candidats} s'il y en a plusieurs. Jamais de choix silencieux.
+
+    Décision de Pascal (brief relais-vocal-confirmation) : pas de moteur
+    tolérant dans VICTOR. Un nom mal dicté, partiel ou approché rend
+    deleguer = vrai : c'est le serveur MCP de Néméton qui le rapproche (règles
+    de la mission 007) et rend projet_ambigu ou projet_introuvable. approche =
+    vrai garde la sous-chaîne pour la seule production vidéo (aucune écriture)."""
     projet = (projet or "").strip()
     projets = {}
     for f in racine.glob("*/metadata.json"):
@@ -1091,10 +1197,15 @@ def resoudre_projet(projet: str, racine: Path = NEMETON_PROJETS) -> dict:
     cible = _norm(projet)
     if not cible:
         return {"erreur": "projet non précisé"}
-    ids = [i for i, n in projets.items() if _norm(n) == cible] \
-        or [i for i, n in projets.items() if cible in _norm(n)]
+    ids = [i for i, n in projets.items() if _norm(n) == cible]
+    if not ids and approche:
+        ids = [i for i, n in projets.items() if cible in _norm(n)]
     if len(ids) == 1:
         return {"id": ids[0], "nom": projets[ids[0]] or ids[0]}
+    if not ids and not approche:
+        return {"erreur": f"pas de projet au nom exact « {_texte_court(projet)} »", "deleguer": True,
+                "consigne": ("délègue dans l'espace nemeton (resume_projet ou etat_calcul du projet "
+                             "tel que dit) : le serveur rapproche les noms mal dictés")}
     if not ids:
         return {"erreur": f"aucun projet ne correspond à « {_texte_court(projet)} »"}
     return {"erreur": "plusieurs projets correspondent",
@@ -1170,7 +1281,7 @@ def lire_fiche(projet: str, racine: Path = NEMETON_PROJETS, fiches: Path = NEMET
     atlas = vue_publiee(p["id"], "atlas")
     if atlas:
         res["atlas_url"] = atlas["url"]
-        res["atlas_a_jour"] = atlas["maj"] >= str(etat.get("fin_a") or "")
+        res["atlas_a_jour"] = NEMETON_DISTANT or atlas["maj"] >= str(etat.get("fin_a") or "")
     return res
 
 
@@ -1542,7 +1653,7 @@ async def production_video(args: dict) -> dict:
                 "error": f"production arrêtée ({etat['erreur']}) : attendre « reprendre »"}
 
     if action == "demarrer":
-        p = await asyncio.to_thread(resoudre_projet, args.get("projet") or "")
+        p = await asyncio.to_thread(resoudre_projet, args.get("projet") or "", approche=True)
         if "id" not in p:
             if p.get("candidats"):
                 return {"ok": False, **p, "consigne": "lis les candidats et demande lequel"}
@@ -2249,6 +2360,8 @@ class Session:
 
     async def user_said(self, text: str):
         await self.interrupt()
+        if jd.actif():
+            journaliser_dictee({"evt": "dit", "dit": text})
         self.emit({"type": "user_final", "text": text})
         self._add_user([{"type": "text", "text": text}])
         self.start_turn()
@@ -2403,12 +2516,27 @@ class Session:
 
     # -- outils
     async def run_tool(self, name: str, args: dict) -> dict:
+        res = await self._run_tool(name, args)
+        if jd.actif() and name in jd.OUTILS and (
+                name != "delegate_to_claude" or res.get("espace") == "nemeton"):
+            evt = {"evt": "outil", "outil": name, "args": dict(args or {})}
+            if name == "delegate_to_claude":
+                evt["delegation"] = evt["args"].pop("prompt", "")
+            evt["resultat"] = jd.resultat_outil(res)
+            journaliser_dictee(evt)
+        return res
+
+    async def _run_tool(self, name: str, args: dict) -> dict:
         if name in ("open_url", "open_nemeton"):
             print(f"[outil] {name} {json.dumps(args, ensure_ascii=False)}", flush=True)
         try:
             if name == "delegate_to_claude":
                 production = PRODUCTION and args.get("etape") in prod.ETAPES
                 prompt = args.get("prompt") or ""
+                if conf.contient_confirmation(prompt):
+                    return {"ok": False, "code": "confirmation_par_victor",
+                            "erreur": ("une confirmation d'écriture ne se délègue pas : appelle "
+                                       "confirmer_ecriture avec le task_id de la tâche qui a rendu l'aperçu")}
                 if production:
                     refus = prod_avant_delegation(args)
                     if refus:
@@ -2494,6 +2622,13 @@ class Session:
                 return res
             if name == "production_video" and PRODUCTION:
                 return await production_video(args)
+            if name == "confirmer_ecriture" and NEMETON:
+                res = confirmer_ecriture(args.get("task_id", ""), bool(args.get("abandonner")))
+                if res.get("status") == "started":
+                    task = TASKS[res["task_id"]]
+                    self.emit({"type": "task_started", "task": task, "multi_espaces": len(ESPACES) > 1})
+                    self.spawn(self.watch_task(task["id"]))
+                return res
             if name == "nemeton_etat" and NEMETON:
                 p = await asyncio.to_thread(resoudre_projet, args.get("projet", ""))
                 if "id" not in p:
@@ -2513,8 +2648,20 @@ class Session:
         if task["status"] == "cancelled":
             return
         summary = (task["output"] or "").strip()[:4000]
+        if jd.actif() and task["espace"] == "nemeton":
+            journaliser_dictee({"evt": "fin_tache", "task_id": task_id, "titre": task["title"],
+                                "resultat": jd.resultat_tache(task["status"], task["output"]),
+                                "confirmation_attendue": bool(task.get("confirmation"))})
         vue = extraire_vue(task["output"] or "") if task["espace"] == "nemeton" else None
-        if vue:
+        attente = task.get("confirmation")
+        if attente:
+            consigne = (f"Une confirmation est attendue (task_id {task_id}) : écriture {attente['outil']} "
+                        f"sur le projet « {attente['projet_nom']} », identifiant {attente['projet']}, "
+                        f"valable jusqu'à {attente['expire_a']} (UTC). Lis l'aperçu ci-dessus en une ou deux "
+                        "phrases avec le nom ET l'identifiant du projet, signale si le nom entendu diffère, "
+                        "puis demande « Je confirme ? ». Appelle confirmer_ecriture avec ce task_id seulement "
+                        "après un oui explicite ; sur un non, avec abandonner = vrai.")
+        elif vue:
             nom = VUE_TYPES.get(vue["type"], "la vue")
             consigne = (f"Bloc vue détecté ({vue['type'] or 'vue'}, projet {vue['projet'] or '?'}) : "
                         f"appelle open_url avec url={vue['url']} puis dis en une phrase que {nom} "

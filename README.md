@@ -252,7 +252,11 @@ VICTOR sait piloter les diagnostics forestiers :
   ni R. Réponse en quelques millisecondes, tableau de bord à l'écran. Il
   signale une fiche périmée et la fait refaire par Claude Code si besoin ;
   après chaque calcul terminé, il la refait seul en tâche de fond
-  (`Rscript`) ;
+  (`Rscript`). La voie rapide ne reconnaît que l'**identifiant** ou le **nom
+  exact** du projet (accents, casse et ponctuation ignorés). Un nom partiel ou
+  mal dicté (« Couchey », « Dabot ») part au serveur MCP de Néméton, qui sait
+  le rapprocher et répond « projet ambigu » avec les candidats plutôt que de
+  choisir à ta place ;
 - « Ouvre l'Atlas de Couchey » → la **vue artéfact** publiée sur claude.ai
   s'ouvre dans le navigateur (de même pour la sélection de parcelles d'une
   commune, le calcul et le plan d'actions). La vue doit avoir été publiée une
@@ -265,7 +269,21 @@ VICTOR sait piloter les diagnostics forestiers :
   `data/compute_job.json` des projets (dossier `NEMETON_PROJETS`, par défaut
   `~/.local/share/nemeton/projects`). Si aucune page n'est ouverte, l'annonce
   attend la prochaine connexion. Une vue publiée avant le calcul est signalée
-  comme ancienne : une tâche ne peut pas la republier ;
+  comme ancienne : une tâche ne peut pas la republier. Exception : avec
+  `VICTOR_NEMETON_DISTANT=1`, l'Atlas est annoncé à jour, car il se redessine
+  à l'ouverture en interrogeant le connecteur distant claude.ai « nemeton »
+  (`vue_atlas`). À n'activer qu'une fois ce connecteur servi durablement et
+  les Atlas republiés avec `vue_atlas` dans leur manifeste ;
+- « Applique les unités de gestion de Dabo », « croise Couchey avec
+  l'ONF » → **écriture confirmée à la voix**. La première tâche ne fait
+  qu'un aperçu (rien n'est écrit). VICTOR le lit en nommant le projet par son
+  nom et son identifiant, puis demande « Je confirme ? ». Seul un « oui »
+  explicite lance l'écriture : VICTOR démarre lui-même une seconde tâche
+  (outil `confirmer_ecriture`). Le jeton à usage unique (10 minutes) du
+  serveur ne sort jamais de VICTOR : il n'est ni lu, ni affiché, ni
+  journalisé. Un silence, un « non » ou un jeton expiré jettent l'aperçu. Ne
+  pose pas de `NEMETON_MCP_JETONS_DIR` propre à VICTOR : ses tâches doivent
+  voir le même dossier de jetons que l'espace `nemeton` ;
 - « Ouvre l'application Néméton sur Couchey » → l'application s'ouvre sur
   l'onglet voulu (seulement si tu dis « l'application », « l'appli », ou
   nommes un onglet propre à l'app : terrain, monitoring, régénération…).
@@ -286,6 +304,26 @@ WantedBy=default.target
 ```
 
 puis `systemctl --user enable --now nemetonshiny`.
+
+#### Journal des dictées (optionnel)
+
+Pour régler la reconnaissance des noms de projets mal dictés (fixture
+`noms_dictes.csv` de nemetonshiny), VICTOR peut garder ce que la
+transcription a réellement entendu, à côté des outils Néméton appelés
+(`nemeton_fiche`, `nemeton_etat`, `open_nemeton`, `confirmer_ecriture`, les
+délégations dans l'espace `nemeton`) et de leur résultat (`projet_ambigu`,
+`projet_introuvable`, candidats). Il est **désactivé par défaut** : c'est de
+la voix transcrite.
+
+```bash
+VICTOR_JOURNAL_DICTEES=~/.local/share/victor/journal-dictees.jsonl
+VICTOR_JOURNAL_DICTEES_MAX_MO=5   # au-delà, le fichier devient .jsonl.1
+```
+
+Une ligne JSON par événement (`evt` = `dit`, `outil` ou `fin_tache`, heure de
+Paris), fichier local en `0600`, jamais envoyé ailleurs, sans audio, sans
+jeton ni clé. Une erreur d'écriture n'interrompt jamais la conversation :
+elle est signalée une fois dans le journal du service.
 
 ### Production de la vidéo tutoriel Néméton
 
@@ -349,6 +387,9 @@ du storyboard, celles que lit le script FFmpeg.
 | `VICTOR_PERMISSION_MODE` | `bypassPermissions` | Autorisations des sessions Claude Code (voir Sécurité) |
 | `NEMETON_PROJETS` | `~/.local/share/nemeton/projects` | Dossier des projets Néméton, surveillé pour annoncer la fin des calculs |
 | `NEMETON_MCP_VUES_DIR` | `~/.cache/R/nemetonmcp/vues` | Dossier des fichiers écrits par nemetonmcp, où la voie rapide lit `projets/<id>/fiche.json` (même variable que nemetonmcp) |
+| `VICTOR_NEMETON_DISTANT` | *(vide)* | `1` quand le connecteur distant claude.ai « nemeton » répond : l'Atlas est alors annoncé à jour après un calcul |
+| `VICTOR_JOURNAL_DICTEES` | *(vide : désactivé)* | Fichier `.jsonl` du journal des dictées |
+| `VICTOR_JOURNAL_DICTEES_MAX_MO` | `5` | Taille max du journal des dictées avant rotation |
 | `VICTOR_KIT_VIDEO` | `~/dev/nemeton-video` | Kit de production de la vidéo tutoriel Néméton |
 | `VICTOR_PROD_CALCUL_TIMEOUT` | `600` | Durée max (s) du suivi d'un calcul pendant la production vidéo |
 | `VICTOR_PORT` | `8788` | Port du serveur local |
