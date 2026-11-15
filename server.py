@@ -695,9 +695,12 @@ def _run_task(task_id: str, prompt: str, cwd: str):
         if PERMISSION_MODE and PERMISSION_MODE.lower() != "off":
             cmd += ["--permission-mode", PERMISSION_MODE]
         extra = {"creationflags": CREATE_NO_WINDOW} if IS_WINDOWS else {"start_new_session": True}
+        # Les serveurs MCP en R (nemetonmcp) mettent parfois plus de 30 s à démarrer,
+        # le délai par défaut de Claude Code : la tâche partait alors sans ses outils.
+        env = {**os.environ, "MCP_TIMEOUT": os.environ.get("MCP_TIMEOUT") or "90000"}
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
-            text=True, encoding="utf-8", errors="replace", cwd=cwd, **extra,
+            text=True, encoding="utf-8", errors="replace", cwd=cwd, env=env, **extra,
         )
         PROCS[task_id] = proc
         try:

@@ -387,6 +387,7 @@ du storyboard, celles que lit le script FFmpeg.
 | `VICTOR_ESPACES` | *(vide)* | Plusieurs espaces de travail : `nom:chemin;nom:chemin` |
 | `VICTOR_ESPACES_DESC` | *(vide)* | Une phrase par espace pour aider VICTOR à choisir : `nom:description;…` |
 | `VICTOR_TASK_TIMEOUT` | `600` | Durée max d'une tâche (secondes) |
+| `MCP_TIMEOUT` | `90000` | Délai (ms) de démarrage des serveurs MCP des tâches Claude Code (le serveur Néméton en R dépasse parfois les 30 s par défaut) |
 | `VICTOR_PERMISSION_MODE` | `bypassPermissions` | Autorisations des sessions Claude Code (voir Sécurité) |
 | `NEMETON_PROJETS` | `~/.local/share/nemeton/projects` | Dossier des projets Néméton, surveillé pour annoncer la fin des calculs |
 | `NEMETON_MCP_VUES_DIR` | `~/.cache/R/nemetonmcp/vues` | Dossier des fichiers écrits par nemetonmcp, où la voie rapide lit `projets/<id>/fiche.json` (même variable que nemetonmcp) |
