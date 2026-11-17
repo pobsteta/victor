@@ -4,3 +4,7 @@ __pycache__/
 *.pyc
 *.jsonl
 *.jsonl.1
+.pytest_cache/
+.claude/*
+!.claude/settings.json
+!.claude/test-command
